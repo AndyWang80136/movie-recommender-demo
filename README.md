@@ -8,6 +8,10 @@ pip install -r requirements/core.txt
 ## Dataset
 The dataset used in the demo: `MovieLens 1M Dataset`
 
+## Train DCN model
+```console
+python train_model.py --config configs/ml-1m.yaml
+```
 
 ## Citation
 MovieLens 1M Dataset

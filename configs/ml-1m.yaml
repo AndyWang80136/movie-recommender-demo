@@ -1,0 +1,22 @@
+data:
+    name: "ML1M"
+    data_dir: "/DATA/"
+    rating_threshold: 4
+    drop_threshold: False
+    apply_fillnan: True
+    apply_preprocessing: True
+    random_seed: 42
+
+features:
+    numerical: ["freshness"]
+    categorical: ["user_id", "item_id", "gender", "age", "occupation"]
+
+optimizer: "SGD"
+epochs: 100
+random_seed: 42
+lr: 0.001
+model:
+    dnn_hidden_units: [32, 32]
+    embedding_dim: 8
+    cross_num: 2
+save_model_dir: ./output_model/

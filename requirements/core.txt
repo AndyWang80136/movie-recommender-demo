@@ -1,2 +1,5 @@
 feature_analysis @git+https://github.com/AndyWang80136/feature_analysis.git
 mmh3
+uvicorn
+fastapi
+streamlit

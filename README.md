@@ -18,6 +18,11 @@ python train_model.py --config configs/ml-1m.yaml
 uvicorn deploy_model:app
 ```
 
+## Run Demo App
+```console
+streamlit run demo.py
+```
+
 ## Citation
 MovieLens 1M Dataset
 ```

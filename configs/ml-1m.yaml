@@ -7,8 +7,8 @@ data:
     apply_preprocessing: True
     random_seed: 42
     hash_buckets:
-        user_id: 1000
-        item_id: 1000
+        user_id: 3000
+        item_id: 2000
 
 features:
     numerical: ["freshness"]

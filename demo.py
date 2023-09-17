@@ -49,7 +49,7 @@ class Demo:
             JOIN occupations USING (occupation_id)
             JOIN ages USING (age_id)
             WHERE test_count != 0
-            ORDER BY users.user_id ASC
+            ORDER BY train_count DESC
         """
         df = pd.read_sql(command, engine)
         return df
@@ -509,14 +509,17 @@ class RealLifeDemo(Demo):
                     by='prediction', ascending=False).reset_index(drop=True)
                 infer_times = len(st.session_state['history_recommendations']
                                   ['recommendations'])
+                # merge last time prediction and make scores decay 0.99
                 if infer_times > 0:
                     prev_candidates = st.session_state[
                         'history_recommendations']['recommendations'][
                             infer_times - 1]
                     prev_candidates = prev_candidates[
-                        ~prev_candidates.item_id.isin(sort_df.item_id)].copy()
+                        (~prev_candidates.item_id.isin(sort_df.item_id))
+                        & (prev_candidates.item_id !=
+                           st.session_state['click_item'])].copy()
                     prev_candidates[
-                        'prediction'] = prev_candidates['prediction'] * 0.9
+                        'prediction'] = prev_candidates['prediction'] * 0.99
                     sort_df = pd.concat([sort_df, prev_candidates],
                                         axis=0).sort_values(by='prediction',
                                                             ascending=False)

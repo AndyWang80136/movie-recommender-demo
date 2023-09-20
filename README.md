@@ -46,7 +46,7 @@ Average user test NDCG@8: 0.8096
 ## Demo
 **Note: The demo videos were recorded with a smaller window scale**
 ### Real Life Recommender
-https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/05c5a754-b05f-429c-ba90-2ef7b4471cbe
+https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/c7fc1f70-f949-4bc6-b036-5fce2f04c465
 
 Real life recommender offers 3 kinds of algorithms:
 
@@ -55,7 +55,7 @@ Real life recommender offers 3 kinds of algorithms:
 - Deep Cross Network: Recommendations based on retrieving 50 candidates in total from previous 2 algorithms and ranking by the DCN model 
 
 ### DCN Model Performance
-https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/32b60127-6e12-4ec2-9950-96cb265eb7d2
+https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/0b7917e2-9c59-481c-b5e8-4b262ba7a095
 
 DCN model test phase performance 
 

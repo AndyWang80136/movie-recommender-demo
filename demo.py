@@ -216,9 +216,9 @@ class RecommendationDemo:
     def format_user(user: User):
         return (
             f'**Gender:** `{user.gender}` \n\n' +
-            f'**age:** `{user.age_interval}` \n\n' +
+            f'**Age:** `{user.age_interval}` \n\n' +
             f'**Occupation:** `{user.occupation}` \n\n' +
-            f'**train/val/test:** `{user.train_count}`/`{user.val_count}`/`{user.test_count}`'
+            f'**Train/Val/Test:** `{user.train_count}`/`{user.val_count}`/`{user.test_count}`'
         )
 
     def infer_df_by_model(self, test_df: pd.DataFrame) -> dict:

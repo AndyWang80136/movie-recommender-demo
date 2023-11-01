@@ -1,13 +1,16 @@
 import os
 import random
-from collections import Iterable
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import List, Optional
+from functools import reduce
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import requests
+import scipy
 import streamlit as st
 from sklearn.metrics import euclidean_distances, ndcg_score, roc_auc_score
 from sqlalchemy import create_engine
@@ -58,6 +61,8 @@ class Item:
     movie_genres: List[str]
     avg_ratings: int
     num_ratings: int
+    pos_ratings: int = field(default=None)
+    neg_ratings: int = field(default=None)
     user_id: int = field(default=None)
     rating: int = field(default=None)
     score: float = field(default=None)
@@ -73,6 +78,7 @@ class User:
     train_count: int = field(default=None)
     val_count: int = field(default=None)
     test_count: int = field(default=None)
+    statistics: dict = field(default_factory=dict)
 
 
 class ItemEngine:
@@ -95,6 +101,21 @@ class ItemEngine:
         """
         item_info = self.item_df.iloc[self.item_mapping[item_id]].to_dict()
         return Item(**item_info, **kwargs)
+
+    def search(self,
+               key: str,
+               value: str,
+               is_contain: bool = False) -> List[Item]:
+        item_df = self.item_df[self.item_df[key].apply(
+            lambda a: value in a if is_contain else a == value)]
+        return [self.create(item_id=item_id) for item_id in item_df.item_id]
+
+    @property
+    def movie_genres(self):
+        genres = sorted(
+            reduce(lambda a, b: set(a).union(b),
+                   self.item_df['movie_genres'].apply(lambda a: a.split('|'))))
+        return genres
 
 
 class UserEngine:
@@ -123,11 +144,9 @@ class Recommendations:
     user_id: int = field(default=None)
     status: str = field(default='not started')
     statistics: dict = field(default_factory=dict)
-    _item_ids: dict = field(default_factory=set)
 
     def add(self, item: Item):
         self.recommendations.append(item)
-        self._item_ids.add(item.item_id)
 
     @property
     def item_ids(self):
@@ -274,13 +293,17 @@ class LoginDemo:
 
     def confirm_clicked(self):
         st.session_state['app'] = RealLifeDemo() if st.session_state[
-            'function'] == 'Real Life Recommender' else DCNPerformanceDemo()
+            'function'] == 'Real Life Recommender' else ML1MDemo(
+            ) if st.session_state[
+                'function'] == 'ML1M Recommender' else DCNPerformanceDemo()
 
     def create_window(self):
         with st.sidebar:
             st.header('Function Selections')
-            st.radio('function',
-                     ['Real Life Recommender', 'Recommender Performance'],
+            st.radio('function', [
+                'Real Life Recommender', 'ML1M Recommender',
+                'Recommender Performance'
+            ],
                      key='function')
             st.button('Confirm', key='confirm', on_click=self.confirm_clicked)
 
@@ -416,7 +439,7 @@ class DCNPerformanceDemo(RecommendationDemo):
                          disabled=True)
 
 
-class RealLifeDemo(RecommendationDemo):
+class ML1MDemo(RecommendationDemo):
 
     def __init__(self):
         super().__init__()
@@ -738,6 +761,224 @@ class RealLifeDemo(RecommendationDemo):
         self.show_click_item_info()
         self.show_recommendations(title='Guess User May Like',
                                   on_click=self.item_button_click)
+
+
+class RealLifeDemo(RecommendationDemo):
+    """Define model performance check on test phase
+    """
+
+    def __init__(self):
+        super().__init__()
+        st.session_state['current_user'] = st.session_state.get(
+            'current_usesr')
+        st.session_state['click_item'] = None
+        st.session_state['recommendations'] = None
+
+    @staticmethod
+    @st.cache_data
+    def load_movie_rating_df():
+        engine = sql_connection()
+        command = f"""
+            SELECT
+                items.item_id,
+                movie_title,
+                movie_genres,
+                COALESCE(num_ratings,0) AS num_ratings,
+                COALESCE(avg_ratings,0) AS avg_ratings,
+                COALESCE(pos_ratings,0) AS pos_ratings,
+                COALESCE(neg_ratings,0) AS neg_ratings
+            FROM items
+            LEFT JOIN (
+                SELECT 
+                    item_id,
+                    COUNT(*) AS num_ratings,
+                    ROUND(AVG(rating), 2) AS avg_ratings,
+                    SUM(CASE WHEN rating > 3 THEN 1 ELSE 0 END) AS pos_ratings,
+                    SUM(CASE WHEN rating <= 3 THEN 1 ELSE 0 END) AS neg_ratings
+                FROM ratings
+                GROUP BY item_id
+            ) item_rating USING (item_id)
+        """
+        df = pd.read_sql(command, engine)
+        return df
+
+    def show_login_form(self):
+        with st.form(key='form'):
+            genres = st.multiselect('Genres',
+                                    self.item_engine.movie_genres,
+                                    max_selections=3)
+            confirm = st.form_submit_button('Confirm')
+            if confirm:
+                # Define a new user
+                st.session_state['current_user'] = User(
+                    user_id=0,
+                    gender=None,
+                    age_interval=None,
+                    occupation=None,
+                    statistics=dict(
+                        genre_click={
+                            genre: {
+                                'alpha': 1,
+                                'beta': 1
+                            }
+                            for genre in self.item_engine.movie_genres
+                        },
+                        prev_genres=[],
+                    ))
+                self.update_genre_posterior(
+                    clicks=genres, impressions=self.item_engine.movie_genres)
+                st.experimental_rerun()
+
+    def update_genre_posterior(self,
+                               clicks: Optional[Union[List[str], set]] = None,
+                               impressions: Optional[Union[List[str],
+                                                           set]] = None):
+        """Update genre posterior by click genres and impression genres
+
+        Args:
+            clicks: List of clicked genres
+            impressions: List of impression genres
+        """
+        if not clicks and not impressions:
+            return
+        st.session_state['current_user'].statistics['prev_genres'] = list(
+            clicks)
+        clicks_set, impressions_set = set(clicks), set(impressions)
+        for genre in impressions_set:
+            st.session_state['current_user'].statistics['genre_click'][genre][
+                'alpha'] += (genre in clicks_set)
+            st.session_state['current_user'].statistics['genre_click'][genre][
+                'beta'] += (genre not in clicks_set)
+
+    def sample_from_genre_posterior(self, top_n: int = 2) -> Tuple[str]:
+        """Get top-n genre by sampling from genre posterior
+
+        Args:
+            top_n: Top-N
+
+        Returns:
+            Tuple[str]: Top-N genres
+        """
+        genre_samples = {
+            genre:
+            scipy.stats.beta(posterior_param['alpha'],
+                             posterior_param['beta']).rvs()
+            for genre, posterior_param in
+            st.session_state['current_user'].statistics['genre_click'].items()
+        }
+        sorted_genres = sorted(genre_samples.items(),
+                               key=lambda a: a[1],
+                               reverse=True)
+        return list(zip(*sorted_genres[:top_n]))[0]
+
+    def make_recommendations(self):
+        """make recommendations based on genres
+        """
+        chosen_genres = []
+        prev_genres = st.session_state['current_user'].statistics[
+            'prev_genres']
+        # first recommendation
+        if st.session_state['recommendations'] is None:
+            chosen_genres = prev_genres
+        if not chosen_genres:
+            chosen_genres = self.sample_from_genre_posterior(top_n=2)
+            # get one of genre from previous click genres
+            if not set(chosen_genres).intersection(
+                    prev_genres) and prev_genres:
+                chosen_genres = [
+                    prev_genres[np.random.randint(low=0,
+                                                  high=len(prev_genres))],
+                    *chosen_genres,
+                ]
+
+        # get item by genre, sample from posterior and rank in each genre
+        genre_items = {}
+        for genre in chosen_genres:
+            genre_items[genre] = Recommendations(user_id=0)
+            for item in self.item_engine.search(key='movie_genres',
+                                                value=genre,
+                                                is_contain=True):
+                item.score = scipy.stats.beta(1 + item.pos_ratings,
+                                              1 + item.neg_ratings).rvs()
+                genre_items[genre].add(item)
+            genre_items[genre].recommendations = sorted(genre_items[genre],
+                                                        key=lambda r: r.score,
+                                                        reverse=True)
+        # merge recommendations by each genre
+        genre_recommendations = Recommendations(user_id=0)
+        while len(genre_recommendations) < self.num_recommendations:
+            for genre in chosen_genres:
+                if not genre_items[genre].recommendations:
+                    continue
+                item = genre_items[genre].recommendations.pop(0)
+                if item.item_id not in genre_recommendations.item_ids:
+                    genre_recommendations.add(item)
+                if len(genre_recommendations) == self.num_recommendations:
+                    break
+
+        st.session_state['recommendations'] = genre_recommendations
+        st.session_state['current_user'].statistics[
+            'prev_genres'] = chosen_genres
+
+    def show_posterior(self):
+        """Draw genre posterior distribution and show in plotly
+        """
+        st.header('Genre Posterior Distribution')
+        x_range = np.linspace(0, 1, 200)
+        fig = go.Figure()
+        for genre, posterior_param in st.session_state[
+                'current_user'].statistics['genre_click'].items():
+            # use bold label to represent selected genres
+            label = f'<b>{genre}<b>' if genre in st.session_state[
+                'current_user'].statistics['prev_genres'] else genre
+            fig.add_trace(
+                go.Scatter(x=x_range,
+                           y=scipy.stats.beta.pdf(x_range,
+                                                  1 + posterior_param['alpha'],
+                                                  1 + posterior_param['beta']),
+                           name=label))
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    @staticmethod
+    def format_item(item: Item):
+        text = (
+            f'{item.movie_title} `({item.pos_ratings}/{item.neg_ratings})`\n\n'
+            + ' '.join([
+                f'`{genre}`' for genre in sorted(item.movie_genres.split('|'))
+            ]))
+        if item.score is not None:
+            text += ('\n\n' + f'`Score: {round(item.score, 2)}`')
+        return text
+
+    def item_button_click(self, item: Item):
+        """Define actions after clicking item
+
+        Args:
+            item: clicked item
+        """
+        st.session_state['click_item'] = item
+        # collect click genres and impression genres
+        total_genres = set()
+        click_genres = set()
+        for r_item in st.session_state['recommendations']:
+            genres = set(r_item.movie_genres.split('|'))
+            if r_item.item_id == item.item_id:
+                click_genres.update(genres)
+            total_genres.update(genres)
+        self.update_genre_posterior(clicks=click_genres,
+                                    impressions=total_genres)
+        self.make_recommendations()
+
+    def create_window(self):
+        if st.session_state['current_user'] is None:
+            self.show_login_form()
+        else:
+            if st.session_state['recommendations'] is None:
+                self.make_recommendations()
+            self.show_posterior()
+            self.show_recommendations(title='Recommendations',
+                                      on_click=self.item_button_click)
 
 
 if __name__ == '__main__':

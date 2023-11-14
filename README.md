@@ -45,17 +45,27 @@ Average user test NDCG@8: 0.8096
 
 ## Demo
 **Note: The demo videos were recorded with a smaller window scale**
-### Real Life Recommender
-https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/c7fc1f70-f949-4bc6-b036-5fce2f04c465
+### Bayesian Recommender
+https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/7bb8d760-c36c-49ce-871b-e313bb2f00a4
 
-Real life recommender offers 3 kinds of algorithms:
+
+Bayesian Recommender uses Bayesian statistics on `movie genres` and `like ratio (created by ratings)` to genreate movie recommendations
+
+
+### ML1M Recommender
+https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/6f546053-5df0-421d-b129-c225c196c9cc
+
+
+
+ML1M recommender offers 3 kinds of algorithms:
 
 - Content-Based Algorithm: Recommendations based on movie genre similarity
 - Uesr-Behavior Algorithm: Recommendations based on movie likeness similarity in each user demographics
 - Deep Cross Network: Recommendations based on retrieving 50 candidates in total from previous 2 algorithms and ranking by the DCN model 
 
-### DCN Model Performance
-https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/0b7917e2-9c59-481c-b5e8-4b262ba7a095
+### DCN Model Test Performance on ML1M
+https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/a93de45c-000f-47c5-bd4a-7bbf035a0673
+
 
 DCN model test phase performance 
 

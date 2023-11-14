@@ -32,8 +32,8 @@ class Layout:
             """
                 <style>
                 [data-testid="stSidebar"][aria-expanded="true"]{
-                    min-width: 280px;
-                    max-width: 280px;
+                    min-width: 320px;
+                    max-width: 320px;
                 }
             """,
             unsafe_allow_html=True,
@@ -292,8 +292,8 @@ class LoginDemo:
         Layout.format_sidebar()
 
     def confirm_clicked(self):
-        st.session_state['app'] = RealLifeDemo() if st.session_state[
-            'function'] == 'Real Life Recommender' else ML1MDemo(
+        st.session_state['app'] = BayesianDemo() if st.session_state[
+            'function'] == 'Bayesian Recommender' else ML1MDemo(
             ) if st.session_state[
                 'function'] == 'ML1M Recommender' else DCNPerformanceDemo()
 
@@ -301,15 +301,15 @@ class LoginDemo:
         with st.sidebar:
             st.header('Function Selections')
             st.radio('function', [
-                'Real Life Recommender', 'ML1M Recommender',
-                'Recommender Performance'
+                'Bayesian Recommender', 'ML1M Recommender',
+                'ML1M Recommender Performance'
             ],
                      key='function')
             st.button('Confirm', key='confirm', on_click=self.confirm_clicked)
 
 
 class DCNPerformanceDemo(RecommendationDemo):
-    """Define model performance check on test phase
+    """Define test performance demo for the DCN model
     """
 
     @staticmethod
@@ -440,6 +440,8 @@ class DCNPerformanceDemo(RecommendationDemo):
 
 
 class ML1MDemo(RecommendationDemo):
+    """Define real life demo on ML1M dataset and apply content-based, user-behavioral-based, and DCN model
+    """
 
     def __init__(self):
         super().__init__()
@@ -763,7 +765,7 @@ class ML1MDemo(RecommendationDemo):
                                   on_click=self.item_button_click)
 
 
-class RealLifeDemo(RecommendationDemo):
+class BayesianDemo(RecommendationDemo):
     """Define model performance check on test phase
     """
 

@@ -176,13 +176,13 @@ class RecommendationDemo:
 
     def __init__(self):
         self.num_recommendations = self.DISPLAY_COLS * self.DISPLAY_ROWS
-        self.user_engine = UserEngine(user_df=self.load_user_phase_df())
-        self.item_engine = ItemEngine(item_df=self.load_movie_rating_df())
+        self.user_engine = UserEngine(user_df=self.user_df)
+        self.item_engine = ItemEngine(item_df=self.item_df)
         st.session_state['recommendations'] = Recommendations()
 
-    @staticmethod
+    @property
     @st.cache_data
-    def load_user_phase_df():
+    def user_df(_self):
         engine = sql_connection()
         command = f"""
             SELECT 
@@ -203,9 +203,9 @@ class RecommendationDemo:
         df = pd.read_sql(command, engine)
         return df
 
-    @staticmethod
+    @property
     @st.cache_data
-    def load_movie_rating_df():
+    def item_df(_self):
         engine = sql_connection()
         command = f"""
             SELECT
@@ -312,36 +312,40 @@ class DCNPerformanceDemo(RecommendationDemo):
     """Define test performance demo for the DCN model
     """
 
-    @staticmethod
-    def get_test_df_by_user_id(user_id: int):
+    @property
+    @st.cache_data
+    def test_df(_self):
         engine = sql_connection()
         command = f"""
-            WITH user_rating AS(
-                SELECT 
-                    ratings.*,
-                    gender,
-                    occupation_id AS occupation,
-                    zip_code,
-                    age_id as age,
-                    movie_title,
-                    movie_genres
-                FROM ratings
-                JOIN users USING (user_id)
-                JOIN items USING (item_id)
-                WHERE ratings.user_id = {user_id}
-            )  
-            SELECT
-                *,
-                rating_timestamp AS timestamp
-            FROM rating_phase
-            RIGHT JOIN user_rating
-            USING (rating_id)
-            WHERE phase = 'test'
+            SELECT 
+                user_id,
+                item_id,
+                rating,
+                CASE WHEN rating > 3 THEN 1 ELSE 0 END AS label,
+                prob,
+                movie_title,
+                movie_genres,
+                age_id AS age,
+                occupation_id AS occupation,
+                gender,
+                age_interval AS age_display,
+                occupations.occupation AS occupation_display,
+                gender AS gender_display
+            FROM test_results
+            JOIN ratings USING (rating_id)
+            JOIN users USING (user_id)
+            JOIN items USING (item_id)
+            JOIN occupations USING (occupation_id)
+            JOIN ages USING (age_id)
         """
         df = pd.read_sql(command, engine)
         return df
 
-    def make_recommendations(self, user_id: int):
+    def get_test_df_by_user_id(self, user_id: int):
+        return self.test_df[self.test_df['user_id'] == user_id].reset_index(
+            drop=True)
+
+    def recommend_items(self, user_id: int):
         """make recommendations by user id, add recommendations in st.session_state['recommendations']
 
         Args:
@@ -349,47 +353,37 @@ class DCNPerformanceDemo(RecommendationDemo):
         """
         if user_id != st.session_state['recommendations'].user_id:
             test_df = self.get_test_df_by_user_id(user_id=user_id)
-            preds = self.infer_df_by_model(test_df)
-            if preds['prediction'] is not None:
-                test_df['score'] = preds['prediction']
-                sorted_df = test_df.sort_values(
-                    by='score', ascending=False).reset_index(drop=True)
-                sorted_df['label'] = (sorted_df['rating'] >= 4).astype(int)
-                recommendations = Recommendations(
-                    user_id=user_id,
-                    status='successed',
-                    statistics={
-                        'user': {
-                            'num_likes': sum(sorted_df['label']),
-                            'num_dislikes': sum(sorted_df['label'] == 0)
-                        }
-                    })
-                for _, rec in sorted_df.head(
-                        self.num_recommendations).iterrows():
-                    item_info = rec.to_dict()
-                    item = self.item_engine.create(
-                        item_id=item_info['item_id'],
-                        score=item_info['score'],
-                        rating=item_info['rating'],
-                        user_id=item_info['user_id'])
-                    recommendations.add(item)
+            sorted_df = test_df.sort_values(
+                by='prob', ascending=False).reset_index(drop=True)
+            recommendations = Recommendations(
+                user_id=user_id,
+                status='successed',
+                statistics={
+                    'user': {
+                        'num_likes': sum(sorted_df['label']),
+                        'num_dislikes': sum(sorted_df['label'] == 0)
+                    }
+                })
+            for _, rec in sorted_df.head(self.num_recommendations).iterrows():
+                item_info = rec.to_dict()
+                item = self.item_engine.create(item_id=item_info['item_id'],
+                                               score=item_info['prob'],
+                                               rating=item_info['rating'],
+                                               user_id=item_info['user_id'])
+                recommendations.add(item)
 
-                recommendations.statistics['metrics'] = {
-                    f'NDCG@{self.num_recommendations}':
-                    round(
-                        ndcg_score(
-                            y_true=sorted_df['label'].values.reshape(1, -1),
-                            y_score=sorted_df['score'].values.reshape(1, -1),
-                            k=self.num_recommendations), 2),
-                    'AUC':
-                    round(
-                        roc_auc_score(y_true=sorted_df['label'].values,
-                                      y_score=sorted_df['score'].values), 2)
-                }
-                st.session_state['recommendations'] = recommendations
-            else:
-                st.session_state['recommendations'] = Recommendations(
-                    user_id=user_id, status=preds['code'])
+            recommendations.statistics['metrics'] = {
+                f'NDCG@{self.num_recommendations}':
+                round(
+                    ndcg_score(y_true=sorted_df['label'].values.reshape(1, -1),
+                               y_score=sorted_df['prob'].values.reshape(1, -1),
+                               k=self.num_recommendations), 2),
+                'AUC':
+                round(
+                    roc_auc_score(y_true=sorted_df['label'].values,
+                                  y_score=sorted_df['prob'].values), 2)
+            }
+            st.session_state['recommendations'] = recommendations
 
     @staticmethod
     def format_item(item: Item):
@@ -421,7 +415,7 @@ class DCNPerformanceDemo(RecommendationDemo):
             user_id = st.selectbox('user_id',
                                    self.user_engine.users,
                                    label_visibility='collapsed')
-            self.make_recommendations(user_id=user_id)
+            self.recommend_items(user_id=user_id)
             user = self.user_engine.create(user_id=user_id)
             st.session_state['current_user'] = user
             st.markdown(self.format_user(user))
@@ -478,10 +472,10 @@ class ML1MDemo(RecommendationDemo):
                                    index='item_id').reset_index(drop=False)
         return df
 
-    def get_recommendations_by_genre(self,
-                                     item: Item,
-                                     user: User,
-                                     num_candidates: int = 25) -> list:
+    def recommend_items_by_genre(self,
+                                 item: Item,
+                                 user: User,
+                                 num_candidates: int = 25) -> list:
         engine = sql_connection()
         command = f"""
             WITH cte AS (
@@ -529,10 +523,10 @@ class ML1MDemo(RecommendationDemo):
             recommendations.add(item)
         return recommendations
 
-    def get_recommendations_by_like_ratio(self,
-                                          item: Item,
-                                          user: User,
-                                          num_candidates: int = 25) -> list:
+    def recommend_items_by_like_ratio(self,
+                                      item: Item,
+                                      user: User,
+                                      num_candidates: int = 25) -> list:
         columns = ['gender', 'occupation', 'age_interval']
         df = self.load_like_ratio_statistics(user=user)
         item_like_ratio = np.nan_to_num(
@@ -560,11 +554,11 @@ class ML1MDemo(RecommendationDemo):
             reverse=True)[:num_candidates]
         return recommendations
 
-    def get_recommendations_by_model(self,
-                                     df: pd.DataFrame,
-                                     user: User,
-                                     item: Item,
-                                     num_candidates: int = 25):
+    def recommend_items_by_model(self,
+                                 df: pd.DataFrame,
+                                 user: User,
+                                 item: Item,
+                                 num_candidates: int = 25):
         df = df.copy()
         preds = self.infer_df_by_model(df)
 
@@ -637,31 +631,31 @@ class ML1MDemo(RecommendationDemo):
     def recommendations_by_algorithm(self, algorithm: str) -> Recommendations:
         if algorithm == 'Content-Based Algorithm':
             # Get recommendations by movie genre similarity
-            recommendations = self.get_recommendations_by_genre(
+            recommendations = self.recommend_items_by_genre(
                 item=st.session_state['click_item'],
                 user=st.session_state['current_user'],
                 num_candidates=self.num_recommendations)
         elif algorithm == 'User-Behavior Algorithm':
             # Get recommendations by like ratio distance
-            recommendations = self.get_recommendations_by_like_ratio(
+            recommendations = self.recommend_items_by_like_ratio(
                 item=st.session_state['click_item'],
                 user=st.session_state['current_user'],
                 num_candidates=self.num_recommendations)
         else:
             # Get 50 candidates from recommendations by movie genre and like ratio
             # Use DCN model to rank items
-            candidates_id = self.get_recommendations_by_genre(
+            candidates_id = self.recommend_items_by_genre(
                 item=st.session_state['click_item'],
                 user=st.session_state['current_user'],
                 num_candidates=25
-            ).item_ids + self.get_recommendations_by_like_ratio(
+            ).item_ids + self.recommend_items_by_like_ratio(
                 item=st.session_state['click_item'],
                 user=st.session_state['current_user'],
                 num_candidates=25).item_ids
             test_df = self.get_test_df_by_user_id(
                 user_id=st.session_state['current_user'].user_id,
                 item_ids=candidates_id)
-            recommendations = self.get_recommendations_by_model(
+            recommendations = self.recommend_items_by_model(
                 df=test_df,
                 item=st.session_state['click_item'],
                 user=st.session_state['current_user'],
@@ -776,9 +770,9 @@ class BayesianDemo(RecommendationDemo):
         st.session_state['click_item'] = None
         st.session_state['recommendations'] = None
 
-    @staticmethod
+    @property
     @st.cache_data
-    def load_movie_rating_df():
+    def item_df(_self):
         engine = sql_connection()
         command = f"""
             SELECT
@@ -873,7 +867,7 @@ class BayesianDemo(RecommendationDemo):
                                reverse=True)
         return list(zip(*sorted_genres[:top_n]))[0]
 
-    def make_recommendations(self):
+    def recommend_items(self):
         """make recommendations based on genres
         """
         chosen_genres = []
@@ -970,14 +964,14 @@ class BayesianDemo(RecommendationDemo):
             total_genres.update(genres)
         self.update_genre_posterior(clicks=click_genres,
                                     impressions=total_genres)
-        self.make_recommendations()
+        self.recommend_items()
 
     def create_window(self):
         if st.session_state['current_user'] is None:
             self.show_login_form()
         else:
             if st.session_state['recommendations'] is None:
-                self.make_recommendations()
+                self.recommend_items()
             self.show_posterior()
             self.show_recommendations(title='Recommendations',
                                       on_click=self.item_button_click)

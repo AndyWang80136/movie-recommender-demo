@@ -3,3 +3,5 @@ mmh3
 uvicorn
 fastapi
 streamlit
+plotly
+sqlalchemy

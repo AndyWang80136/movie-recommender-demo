@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import requests
 import scipy
 import streamlit as st
+from jinja2 import Template
 from sklearn.metrics import euclidean_distances, ndcg_score, roc_auc_score
 from sqlalchemy import create_engine
 
@@ -22,6 +23,12 @@ def sql_connection():
     return create_engine(
         f'postgresql://{os.environ["DB_USER"]}:{os.environ["DB_PW"]}@{os.environ["DB_DATASET"]}'
     )
+
+
+def load_query_template(query_file: str) -> Template:
+    with open(query_file, 'r') as fp:
+        sql_query = Template(fp.read())
+    return sql_query
 
 
 class Layout:
@@ -183,49 +190,14 @@ class RecommendationDemo:
     @property
     @st.cache_data
     def user_df(_self):
-        engine = sql_connection()
-        command = f"""
-            SELECT 
-                users.user_id,
-                users.gender,
-                ages.age_interval,
-                occupations.occupation,
-                train_count,
-                val_count,
-                test_count
-            FROM user_phase_count
-            JOIN users USING (user_id)
-            JOIN occupations USING (occupation_id)
-            JOIN ages USING (age_id)
-            WHERE test_count != 0
-            ORDER BY train_count DESC
-        """
-        df = pd.read_sql(command, engine)
-        return df
+        sql_query = load_query_template(query_file='sql/user_df.sql').render()
+        return pd.read_sql(sql_query, sql_connection())
 
     @property
     @st.cache_data
     def item_df(_self):
-        engine = sql_connection()
-        command = f"""
-            SELECT
-                items.item_id,
-                movie_title,
-                movie_genres,
-                COALESCE(num_ratings,0) AS num_ratings,
-                COALESCE(avg_ratings,0) AS avg_ratings
-            FROM items
-            LEFT JOIN (
-                SELECT 
-                    item_id,
-                    COUNT(*) AS num_ratings,
-                    ROUND(AVG(rating), 2) AS avg_ratings
-                FROM ratings
-                GROUP BY item_id
-            ) item_rating USING (item_id)
-        """
-        df = pd.read_sql(command, engine)
-        return df
+        sql_query = load_query_template(query_file='sql/item_df.sql').render()
+        return pd.read_sql(sql_query, sql_connection())
 
     @staticmethod
     def format_item(item: Item):
@@ -315,31 +287,8 @@ class DCNPerformanceDemo(RecommendationDemo):
     @property
     @st.cache_data
     def test_df(_self):
-        engine = sql_connection()
-        command = f"""
-            SELECT 
-                user_id,
-                item_id,
-                rating,
-                CASE WHEN rating > 3 THEN 1 ELSE 0 END AS label,
-                prob,
-                movie_title,
-                movie_genres,
-                age_id AS age,
-                occupation_id AS occupation,
-                gender,
-                age_interval AS age_display,
-                occupations.occupation AS occupation_display,
-                gender AS gender_display
-            FROM test_results
-            JOIN ratings USING (rating_id)
-            JOIN users USING (user_id)
-            JOIN items USING (item_id)
-            JOIN occupations USING (occupation_id)
-            JOIN ages USING (age_id)
-        """
-        df = pd.read_sql(command, engine)
-        return df
+        sql_query = load_query_template(query_file='sql/test_df.sql').render()
+        return pd.read_sql(sql_query, sql_connection())
 
     def get_test_df_by_user_id(self, user_id: int):
         return self.test_df[self.test_df['user_id'] == user_id].reset_index(
@@ -445,25 +394,33 @@ class ML1MDemo(RecommendationDemo):
         self.make_welcome_recommendations()
 
     @staticmethod
-    def load_like_ratio_statistics(user: User, item: Optional[Item] = None):
-        engine = sql_connection()
-        command = f"""
-            SELECT 
-                likes_table.item_id,
-                likes_table.attribute_name,
-                likes_table.attribute_value,
-                ROUND(num_likes::NUMERIC/NULLIF(num_ratings, 0), 2) AS like_ratio
-            FROM num_likes_user_domain likes_table
-            JOIN num_ratings_user_domain ratings_table ON 
-                ratings_table.attribute_name = likes_table.attribute_name AND
-                ratings_table.attribute_value = likes_table.attribute_value AND 
-                ratings_table.item_id = likes_table.item_id
-            WHERE (likes_table.attribute_name = 'gender' AND likes_table.attribute_value = '{user.gender}') OR 
-                (likes_table.attribute_name = 'age_interval' AND likes_table.attribute_value = '{user.age_interval}') OR
-                (likes_table.attribute_name = 'occupation' AND likes_table.attribute_value = '{user.occupation}')
-            ORDER BY item_id ASC
-        """
-        df = pd.read_sql(command, engine)
+    def get_like_ratio_df(user: User):
+        sql_query = load_query_template(
+            query_file='sql/like_ratio_stats.sql').render(
+                gender=user.gender,
+                age_interval=user.age_interval,
+                occupation=user.occupation)
+        return pd.read_sql(sql_query, sql_connection())
+
+    @staticmethod
+    def get_genre_df(user: User):
+        sql_query = load_query_template(
+            query_file='sql/genre_stats.sql').render(
+                gender=user.gender,
+                age_interval=user.age_interval,
+                occupation=user.occupation)
+        return pd.read_sql(sql_query, sql_connection())
+
+    @staticmethod
+    def get_infer_df(user_id: int, item_ids: List[int]):
+        sql_query = load_query_template(query_file='sql/infer_df.sql').render(
+            user_id=user_id, item_ids=tuple(item_ids))
+        return pd.read_sql(sql_query, sql_connection())
+
+    def load_like_ratio_statistics(self,
+                                   user: User,
+                                   item: Optional[Item] = None):
+        df = self.get_like_ratio_df(user=user)
         if item is not None:
             df = df[df['item_id'] == item.item_id].reset_index(drop=True)
         df = df[['attribute_name', 'like_ratio',
@@ -476,46 +433,11 @@ class ML1MDemo(RecommendationDemo):
                                  item: Item,
                                  user: User,
                                  num_candidates: int = 25) -> list:
-        engine = sql_connection()
-        command = f"""
-            WITH cte AS (
-                SELECT 
-                    item1_id,
-                    item2_id,
-                    similarity,
-                    RANK() OVER (PARTITION BY item1_id ORDER BY similarity DESC) AS sim_rank
-                FROM item_genre_cossim
-                WHERE item1_id = {item.item_id}
-            ), user_item_ratings AS (
-                SELECT
-                    items.item_id,
-                    movie_title,
-                    movie_genres,
-                    COALESCE(num_ratings,0) AS num_ratings,
-                    COALESCE(avg_ratings,0) AS avg_ratings
-                FROM items
-                LEFT JOIN (
-                    SELECT 
-                        item_id,
-                        COUNT(*) AS num_ratings,
-                        ROUND(AVG(rating), 2) AS avg_ratings
-                    FROM ratings
-                    GROUP BY item_id
-                ) item_rating ON item_rating.item_id = items.item_id
-            )
-            SELECT 
-                item1_id,
-                item2_id, 
-                similarity,
-                sim_rank,
-                num_ratings,
-                avg_ratings
-            FROM cte
-            JOIN user_item_ratings ON user_item_ratings.item_id = item2_id
-            ORDER BY similarity DESC, num_ratings DESC, avg_ratings DESC
-            LIMIT {num_candidates}
-        """
-        cossim_df = pd.read_sql(command, engine)
+        sql_query = load_query_template(
+            query_file='sql/genre_stats.sql').render(
+                num_candidates=num_candidates, item_id=item.item_id)
+        cossim_df = pd.read_sql(sql_query, sql_connection())
+
         recommendations = Recommendations(user_id=user.user_id,
                                           status='successed')
         for item_id in cossim_df['item2_id']:
@@ -605,29 +527,6 @@ class ML1MDemo(RecommendationDemo):
                 status='failed')
         return recommendations
 
-    @staticmethod
-    def get_test_df_by_user_id(user_id: int, item_ids: List[int]):
-        engine = sql_connection()
-        command = f"""
-            WITH cte AS (
-                SELECT 
-                    items.*,
-                    {user_id} AS user_id
-                FROM items
-                WHERE items.item_id IN {tuple(item_ids)}
-            )
-
-            SELECT 
-                *,
-                occupation_id AS occupation,
-                age_id AS age,
-                (SELECT MAX(rating_timestamp) FROM ratings WHERE user_id = {user_id}) AS timestamp
-            FROM cte
-            JOIN users USING (user_id)
-        """
-        df = pd.read_sql(command, engine)
-        return df
-
     def recommendations_by_algorithm(self, algorithm: str) -> Recommendations:
         if algorithm == 'Content-Based Algorithm':
             # Get recommendations by movie genre similarity
@@ -652,7 +551,7 @@ class ML1MDemo(RecommendationDemo):
                 item=st.session_state['click_item'],
                 user=st.session_state['current_user'],
                 num_candidates=25).item_ids
-            test_df = self.get_test_df_by_user_id(
+            test_df = self.get_infer_df(
                 user_id=st.session_state['current_user'].user_id,
                 item_ids=candidates_id)
             recommendations = self.recommend_items_by_model(
@@ -769,34 +668,6 @@ class BayesianDemo(RecommendationDemo):
             'current_usesr')
         st.session_state['click_item'] = None
         st.session_state['recommendations'] = None
-
-    @property
-    @st.cache_data
-    def item_df(_self):
-        engine = sql_connection()
-        command = f"""
-            SELECT
-                items.item_id,
-                movie_title,
-                movie_genres,
-                COALESCE(num_ratings,0) AS num_ratings,
-                COALESCE(avg_ratings,0) AS avg_ratings,
-                COALESCE(pos_ratings,0) AS pos_ratings,
-                COALESCE(neg_ratings,0) AS neg_ratings
-            FROM items
-            LEFT JOIN (
-                SELECT 
-                    item_id,
-                    COUNT(*) AS num_ratings,
-                    ROUND(AVG(rating), 2) AS avg_ratings,
-                    SUM(CASE WHEN rating > 3 THEN 1 ELSE 0 END) AS pos_ratings,
-                    SUM(CASE WHEN rating <= 3 THEN 1 ELSE 0 END) AS neg_ratings
-                FROM ratings
-                GROUP BY item_id
-            ) item_rating USING (item_id)
-        """
-        df = pd.read_sql(command, engine)
-        return df
 
     def show_login_form(self):
         with st.form(key='form'):

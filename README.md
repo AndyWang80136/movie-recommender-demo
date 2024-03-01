@@ -2,7 +2,7 @@
 
 ## Installation
 ```console
-pip install -r requirements/core.txt
+pip install -e .
 ```
 
 ## Dataset

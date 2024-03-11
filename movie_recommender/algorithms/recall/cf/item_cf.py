@@ -124,7 +124,7 @@ class ItemCF(MovieCF, metaclass=ABCMeta):
             user_id: Optional[int] = None,
             similarity_top_k: int = SIMILARITY_TOP_K,
             output_top_k: int = OUTPUT_TOP_K) -> pd.DataFrame:
-        """infer function by given item_ids. One of [`item_ids`, `user_id`] should be input.
+        """infer function by given one of [`item_ids`, `user_id`].
         If `user_id` is given, `item_ids` will be the interacted items from the specific `user_id`.
         Meanwhile, the ratings of items will be accessed as the scores of the items.
         Otherwise, just use the similarity as the scores  
@@ -172,13 +172,13 @@ class RatingItemCF(ItemCF):
 
     def check_user_status(
             self, user_ids: Union[UserIds, int]) -> Union[List[bool], bool]:
-        """check the user id in train data or not 
+        """check the user id in history data or not 
 
         Args:
             user_ids: single user id or user id list
 
         Returns:
-            Union[List[bool], bool]: user id in train data or not
+            Union[List[bool], bool]: user id in history data or not
         """
         if not is_sequence(user_ids):
             user_ids = [user_ids]
@@ -200,7 +200,7 @@ class RatingItemCF(ItemCF):
         return matrix
 
     def create_query_matrix(self, item_id: Union[ItemIds, int]) -> np.ndarray:
-        """create query matrix for similarity searching
+        """create query matrix for similarity searching by `item_id`
 
         Args:
             item_id: item id or sequence of item id

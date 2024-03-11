@@ -1,6 +1,9 @@
 # Movie Recommender Demo
 
 ## Installation
+1. Install [Faiss](https://github.com/facebookresearch/faiss/blob/main/INSTALL.md) package
+
+2. Type in Terminal
 ```console
 pip install -e .
 ```

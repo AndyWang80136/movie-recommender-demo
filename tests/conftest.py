@@ -3,6 +3,8 @@ import os
 import pandas as pd
 import pytest
 
+from movie_recommender.utils.sql import PSQLLoader
+
 
 @pytest.fixture(scope='session', name='user_df')
 def test_user_df():
@@ -37,3 +39,15 @@ def test_rating_df():
         (3, 3, 5),
     ],
                         columns=['user_id', 'item_id', 'rating'])
+
+
+@pytest.fixture(scope='session')
+def psql_loader():
+    try:
+        loader = PSQLLoader(user=os.environ.get("DB_USER"),
+                            password=os.environ.get('DB_PW'),
+                            database=os.environ.get('DB_DATABASE'))
+        assert loader.is_valid_connection()
+        return loader
+    except:
+        pytest.skip(reason='Wrong psql information')

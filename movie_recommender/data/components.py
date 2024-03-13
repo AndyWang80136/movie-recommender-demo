@@ -68,7 +68,7 @@ class Recommendations:
     def get(self, item_id: int):
         try:
             return self._index[item_id]
-        except IndexError:
+        except KeyError:
             raise
 
     def to_df(self, columns: Tuple[str] = ('item_id', )):

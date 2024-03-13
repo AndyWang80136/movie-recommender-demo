@@ -15,7 +15,7 @@ class UCBImpressionReranker(_ImpressionReranker):
     column: str = 'item_id'
     exploitation_column: str = 'score'
     output_column_name: str = 'ucb_score'
-    param_lambda: float = 0.5
+    param_lambda: float = 1.
 
     def calculate_exploitation_score(self, df: pd.DataFrame) -> np.ndarray:
         """calculate exploitation score

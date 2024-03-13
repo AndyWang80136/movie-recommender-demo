@@ -1,34 +1,40 @@
-import os
 import random
 from collections.abc import Iterable
-from copy import deepcopy
-from dataclasses import dataclass, field
-from functools import reduce
-from typing import List, Optional, Tuple, Union
+from typing import Dict, Optional
 
-import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import requests
-import scipy
 import streamlit as st
-from jinja2 import Template
-from sklearn.metrics import euclidean_distances, ndcg_score, roc_auc_score
-from sqlalchemy import create_engine
 
-MODEL_URL = 'http://localhost:8000/predict/'
+from movie_recommender.data import (Item, ItemEngine, MovieData,
+                                    Recommendations, User, UserEngine)
+from movie_recommender.utils import PSQLLoader
 
+RECALL_MODEL = 'http://localhost:8000'
+RANK_MODEL = 'http://localhost:8001'
+RERANK_MODEL = 'http://localhost:8002'
+RECALL_METHODS = [
+    'ItemCF-Ratings', 'UserCF-Ratings', 'UserCF-Content', 'ItemCF-Genres',
+    'Item-Genres'
+]
+RECALL_METHOD_INFO = {
+    'ItemCF-Ratings': f'{RECALL_MODEL}/recall/itemcf-ratings/users',
+    'UserCF-Ratings': f'{RECALL_MODEL}/recall/usercf-ratings/users',
+    'UserCF-Content': f'{RECALL_MODEL}/recall/usercf-content/users',
+    'ItemCF-Genres': f'{RECALL_MODEL}/recall/itemcf-genres/users',
+    'Item-Genres': f'{RECALL_MODEL}/recall/item-genres/items'
+}
+RANK_METHODS = ['DCN']
+RANK_METHOD_INFO = {'DCN': f'{RANK_MODEL}/rank/dcn'}
+RERANK_METHODS = ['UCB-MMR']
+RERANK_INFO = {'UCB-MMR': f'{RERANK_MODEL}/rerank/ucb-mmr'}
 
-def sql_connection():
-    return create_engine(
-        f'postgresql://{os.environ["DB_USER"]}:{os.environ["DB_PW"]}@{os.environ["DB_DATASET"]}'
-    )
-
-
-def load_query_template(query_file: str) -> Template:
-    with open(query_file, 'r') as fp:
-        sql_query = Template(fp.read())
-    return sql_query
+STAGES = ['recall', 'rank', 'rerank']
+MODELS = {
+    'recall': RECALL_METHODS,
+    'rank': RANK_METHODS,
+    'rerank': RERANK_METHODS
+}
 
 
 class Layout:
@@ -52,7 +58,7 @@ class Layout:
             """
                 <style>
                 div.stButton > button:first-child {
-                    height: 160px;
+                    height: 200px;
                     width: 180px;
                 }
                 </style>
@@ -61,143 +67,31 @@ class Layout:
         )
 
 
-@dataclass
-class Item:
-    movie_title: str
-    item_id: int
-    movie_genres: List[str]
-    avg_ratings: int
-    num_ratings: int
-    pos_ratings: int = field(default=None)
-    neg_ratings: int = field(default=None)
-    user_id: int = field(default=None)
-    rating: int = field(default=None)
-    score: float = field(default=None)
-    statistics: dict = field(default_factory=dict)
-
-
-@dataclass
-class User:
-    user_id: int
-    gender: str
-    age_interval: str
-    occupation: str
-    train_count: int = field(default=None)
-    val_count: int = field(default=None)
-    test_count: int = field(default=None)
-    statistics: dict = field(default_factory=dict)
-
-
-class ItemEngine:
-    """Define a item information engine
-    """
-
-    def __init__(self, item_df: pd.DataFrame):
-        self.item_df = item_df
-        self.item_mapping = dict(
-            zip(self.item_df['item_id'], self.item_df.index))
-
-    def create(self, item_id: int, **kwargs) -> Item:
-        """create item object from item_id
-
-        Args:
-            item_id: item id
-
-        Returns:
-            Item: Item object
-        """
-        item_info = self.item_df.iloc[self.item_mapping[item_id]].to_dict()
-        return Item(**item_info, **kwargs)
-
-    def search(self,
-               key: str,
-               value: str,
-               is_contain: bool = False) -> List[Item]:
-        item_df = self.item_df[self.item_df[key].apply(
-            lambda a: value in a if is_contain else a == value)]
-        return [self.create(item_id=item_id) for item_id in item_df.item_id]
-
-    @property
-    def movie_genres(self):
-        genres = sorted(
-            reduce(lambda a, b: set(a).union(b),
-                   self.item_df['movie_genres'].apply(lambda a: a.split('|'))))
-        return genres
-
-
-class UserEngine:
-    """Define a user information engine
-    """
-
-    def __init__(self, user_df: pd.DataFrame):
-        self.user_df = user_df
-        self.user_mapping = dict(
-            zip(self.user_df['user_id'], self.user_df.index))
-
-    def create(self, user_id: int):
-        user_info = self.user_df.iloc[self.user_mapping[user_id]].to_dict()
-        return User(**user_info)
-
-    @property
-    def users(self):
-        return self.user_df.user_id.values.tolist()
-
-
-@dataclass
-class Recommendations:
-    """stores information of recommendations
-    """
-    recommendations: List[Item] = field(default_factory=list)
-    user_id: int = field(default=None)
-    status: str = field(default='not started')
-    statistics: dict = field(default_factory=dict)
-
-    def add(self, item: Item):
-        self.recommendations.append(item)
-
-    @property
-    def item_ids(self):
-        return [item.item_id for item in self.recommendations]
-
-    def __len__(self):
-        return len(self.recommendations)
-
-    def __getitem__(self, index: int):
-        if index < len(self.recommendations):
-            return self.recommendations[index]
-        else:
-            raise IndexError
-
-    def __iter__(self):
-        index = 0
-        while index < len(self.recommendations):
-            yield self.recommendations[index]
-            index += 1
-
-
 class RecommendationDemo:
-    """
-    """
     DISPLAY_COLS = 4
     DISPLAY_ROWS = 2
+    NUM_SIMILARITY_TOP_K: int = 50
+    NUM_EACH_RECALL_RECOMMENDATIONS: int = 100
+    NUM_RANK_RECOMMENDATIONS: int = 100
+    NUM_DISPLAY_RECOMMNEDATIONS: int = DISPLAY_COLS * DISPLAY_ROWS
 
     def __init__(self):
-        self.num_recommendations = self.DISPLAY_COLS * self.DISPLAY_ROWS
-        self.user_engine = UserEngine(user_df=self.user_df)
-        self.item_engine = ItemEngine(item_df=self.item_df)
-        st.session_state['recommendations'] = Recommendations()
+        self.psql_loader = PSQLLoader()
+        self.user_engine = UserEngine(df=self.dataset.users)
+        self.item_engine = ItemEngine(df=self.dataset.items)
+        st.session_state['recommendations'] = st.session_state.get(
+            'recommendations', Recommendations())
 
     @property
     @st.cache_data
-    def user_df(_self):
-        sql_query = load_query_template(query_file='sql/user_df.sql').render()
-        return pd.read_sql(sql_query, sql_connection())
+    def dataset(_self):
+        dataset = MovieData(users=_self.psql_loader.load('sql/user_df.sql'),
+                            items=_self.psql_loader.load('sql/item_df.sql'),
+                            ratings=_self.psql_loader.load(
+                                'sql/rating_df.sql',
+                                query_params={'phase': 'train'}))
 
-    @property
-    @st.cache_data
-    def item_df(_self):
-        sql_query = load_query_template(query_file='sql/item_df.sql').render()
-        return pd.read_sql(sql_query, sql_connection())
+        return dataset
 
     @staticmethod
     def format_item(item: Item):
@@ -209,28 +103,13 @@ class RecommendationDemo:
             f'**Gender:** `{user.gender}` \n\n' +
             f'**Age:** `{user.age_interval}` \n\n' +
             f'**Occupation:** `{user.occupation}` \n\n' +
-            f'**Train/Val/Test:** `{user.train_count}`/`{user.val_count}`/`{user.test_count}`'
+            f'**Train/Val/Test:** `{user.statistics["train_count"]}`/`{user.statistics["val_count"]}`/`{user.statistics["test_count"]}` \n\n'
+            +
+            f'**Interaction TImes**: `{user.statistics["demo_interaction_times"]}`'
         )
 
-    def infer_df_by_model(self, test_df: pd.DataFrame) -> dict:
-        """infer dataframe by deployed model
-
-        Args:
-            test_df: dataframe
-
-        Returns:
-            dict: value with status code and prediction
-        """
-        try:
-            response = requests.post(MODEL_URL,
-                                     json={'data': test_df.to_dict()})
-            if response.status_code == 200:
-                pred = response.json()
-                return {'code': response.status_code, 'prediction': pred}
-            else:
-                return {'code': response.status_code, 'prediction': None}
-        except Exception as e:
-            return {'code': e, 'prediction': None}
+    def format_algorithm(self):
+        return
 
     def show_recommendations(self,
                              title: str = 'Recommendations',
@@ -256,602 +135,310 @@ class RecommendationDemo:
                                      on_click=on_click)
 
 
-class LoginDemo:
-    """Define the window when first entering application
-    """
-
-    def __init__(self):
-        Layout.format_sidebar()
-
-    def confirm_clicked(self):
-        st.session_state['app'] = BayesianDemo() if st.session_state[
-            'function'] == 'Bayesian Recommender' else ML1MDemo(
-            ) if st.session_state[
-                'function'] == 'ML1M Recommender' else DCNPerformanceDemo()
-
-    def create_window(self):
-        with st.sidebar:
-            st.header('Function Selections')
-            st.radio('function', [
-                'Bayesian Recommender', 'ML1M Recommender',
-                'ML1M Recommender Performance'
-            ],
-                     key='function')
-            st.button('Confirm', key='confirm', on_click=self.confirm_clicked)
-
-
-class DCNPerformanceDemo(RecommendationDemo):
-    """Define test performance demo for the DCN model
-    """
-
-    @property
-    @st.cache_data
-    def test_df(_self):
-        sql_query = load_query_template(query_file='sql/test_df.sql').render()
-        return pd.read_sql(sql_query, sql_connection())
-
-    def get_test_df_by_user_id(self, user_id: int):
-        return self.test_df[self.test_df['user_id'] == user_id].reset_index(
-            drop=True)
-
-    def recommend_items(self, user_id: int):
-        """make recommendations by user id, add recommendations in st.session_state['recommendations']
-
-        Args:
-            user_id: user id
-        """
-        if user_id != st.session_state['recommendations'].user_id:
-            test_df = self.get_test_df_by_user_id(user_id=user_id)
-            sorted_df = test_df.sort_values(
-                by='prob', ascending=False).reset_index(drop=True)
-            recommendations = Recommendations(
-                user_id=user_id,
-                status='successed',
-                statistics={
-                    'user': {
-                        'num_likes': sum(sorted_df['label']),
-                        'num_dislikes': sum(sorted_df['label'] == 0)
-                    }
-                })
-            for _, rec in sorted_df.head(self.num_recommendations).iterrows():
-                item_info = rec.to_dict()
-                item = self.item_engine.create(item_id=item_info['item_id'],
-                                               score=item_info['prob'],
-                                               rating=item_info['rating'],
-                                               user_id=item_info['user_id'])
-                recommendations.add(item)
-
-            recommendations.statistics['metrics'] = {
-                f'NDCG@{self.num_recommendations}':
-                round(
-                    ndcg_score(y_true=sorted_df['label'].values.reshape(1, -1),
-                               y_score=sorted_df['prob'].values.reshape(1, -1),
-                               k=self.num_recommendations), 2),
-                'AUC':
-                round(
-                    roc_auc_score(y_true=sorted_df['label'].values,
-                                  y_score=sorted_df['prob'].values), 2)
-            }
-            st.session_state['recommendations'] = recommendations
-
-    @staticmethod
-    def format_item(item: Item):
-        return (f'{item.movie_title} \n\n' +
-                f'`Avg Rating: {item.avg_ratings}` \n\n' +
-                f'`User Rating: {item.rating}` \n\n' +
-                f'`Score: {round(item.score, 2)}`')
-
-    def show_statistics(self):
-        num_likes = st.session_state["recommendations"].statistics['user'][
-            'num_likes']
-        num_dislikes = st.session_state["recommendations"].statistics['user'][
-            'num_dislikes']
-
-        st.header('Testing Phase Statistics')
-        st.markdown(f'**Like\/DisLike: {num_likes}/{num_dislikes}**')
-        st.header('Metrics')
-        st.markdown(
-            f'**NDCG@{self.num_recommendations}: {st.session_state["recommendations"].statistics["metrics"][f"NDCG@{self.num_recommendations}"]}**\n\n'
-            +
-            f'**AUC: {st.session_state["recommendations"].statistics["metrics"][f"AUC"]}**'
-        )
-
-    def create_window(self):
-        Layout.format_sidebar()
-        # sidebar view
-        with st.sidebar:
-            st.header('User ID')
-            user_id = st.selectbox('user_id',
-                                   self.user_engine.users,
-                                   label_visibility='collapsed')
-            self.recommend_items(user_id=user_id)
-            user = self.user_engine.create(user_id=user_id)
-            st.session_state['current_user'] = user
-            st.markdown(self.format_user(user))
-
-        if st.session_state['recommendations'].status == 'successed':
-            # sidebar view
-            with st.sidebar:
-                self.show_statistics()
-            # main window
-            self.show_recommendations(title='Test Recommendations',
-                                      title_divider='violet')
-        else:
-            st.text_area(label='Error Message',
-                         value=st.session_state['recommendations'].status,
-                         disabled=True)
-
-
 class ML1MDemo(RecommendationDemo):
-    """Define real life demo on ML1M dataset and apply content-based, user-behavioral-based, and DCN model
+    """Define real life demo on ML1M dataset by applying recall, rank, and rerank
     """
 
     def __init__(self):
         super().__init__()
-        st.session_state['recommendations'] = None
-        st.session_state['click_item'] = None
-        st.session_state['history_recommendations'] = None
-        self.make_welcome_recommendations()
+        st.session_state['clicked_item'] = st.session_state.get(
+            'clicked_item', None)
+        st.session_state['clicked_items'] = st.session_state.get(
+            'clicked_items', None)
+        st.session_state['prev_state'] = st.session_state.get(
+            'prev_state', Recommendations())
+        st.session_state['prev_recommendations'] = st.session_state.get(
+            'prev_recommendations', Recommendations())
 
-    @staticmethod
-    def get_like_ratio_df(user: User):
-        sql_query = load_query_template(
-            query_file='sql/like_ratio_stats.sql').render(
-                gender=user.gender,
-                age_interval=user.age_interval,
-                occupation=user.occupation)
-        return pd.read_sql(sql_query, sql_connection())
-
-    @staticmethod
-    def get_genre_df(user: User):
-        sql_query = load_query_template(
-            query_file='sql/genre_stats.sql').render(
-                gender=user.gender,
-                age_interval=user.age_interval,
-                occupation=user.occupation)
-        return pd.read_sql(sql_query, sql_connection())
-
-    @staticmethod
-    def get_infer_df(user_id: int, item_ids: List[int]):
-        sql_query = load_query_template(query_file='sql/infer_df.sql').render(
-            user_id=user_id, item_ids=tuple(item_ids))
-        return pd.read_sql(sql_query, sql_connection())
-
-    def load_like_ratio_statistics(self,
-                                   user: User,
-                                   item: Optional[Item] = None):
-        df = self.get_like_ratio_df(user=user)
-        if item is not None:
-            df = df[df['item_id'] == item.item_id].reset_index(drop=True)
-        df = df[['attribute_name', 'like_ratio',
-                 'item_id']].pivot(columns='attribute_name',
-                                   values='like_ratio',
-                                   index='item_id').reset_index(drop=False)
-        return df
-
-    def recommend_items_by_genre(self,
-                                 item: Item,
-                                 user: User,
-                                 num_candidates: int = 25) -> list:
-        sql_query = load_query_template(
-            query_file='sql/genre_stats.sql').render(
-                num_candidates=num_candidates, item_id=item.item_id)
-        cossim_df = pd.read_sql(sql_query, sql_connection())
-
-        recommendations = Recommendations(user_id=user.user_id,
-                                          status='successed')
-        for item_id in cossim_df['item2_id']:
-            item = self.item_engine.create(item_id=item_id)
-            recommendations.add(item)
-        return recommendations
-
-    def recommend_items_by_like_ratio(self,
-                                      item: Item,
-                                      user: User,
-                                      num_candidates: int = 25) -> list:
-        columns = ['gender', 'occupation', 'age_interval']
-        df = self.load_like_ratio_statistics(user=user)
-        item_like_ratio = np.nan_to_num(
-            df[df['item_id'] == item.item_id][columns].values, nan=-1.)
-        all_like_ratio = np.nan_to_num(df[columns].values, nan=-1.)
-
-        df['distance'] = np.round(
-            euclidean_distances(item_like_ratio, all_like_ratio), 2).ravel()
-        df = df[df.item_id != item.item_id]
-        sorted_df = df.sort_values(by='distance')
-        sorted_df['rank'] = sorted_df['distance'].rank(method='min')
-        candidate_df = sorted_df[sorted_df['rank'] <= sorted_df['rank'].iloc[
-            num_candidates - 1]]
-        recommendations = Recommendations(user_id=user.user_id,
-                                          status='successed')
-        for item_id, distance in zip(candidate_df['item_id'],
-                                     candidate_df['distance']):
-            item = self.item_engine.create(item_id=item_id,
-                                           statistics={'distance': distance})
-            recommendations.add(item)
-        recommendations.recommendations = sorted(
-            recommendations,
-            key=lambda r:
-            (-r.statistics['distance'], r.num_ratings, r.avg_ratings),
-            reverse=True)[:num_candidates]
-        return recommendations
-
-    def recommend_items_by_model(self,
-                                 df: pd.DataFrame,
-                                 user: User,
-                                 item: Item,
-                                 num_candidates: int = 25):
-        df = df.copy()
-        preds = self.infer_df_by_model(df)
-
-        if preds['prediction'] is not None:
-            df['score'] = preds['prediction']
-            sort_df = df.sort_values(
-                by='score',
-                ascending=False).reset_index(drop=True).head(num_candidates)
-
-            recommendations = Recommendations(
-                user_id=user.user_id,
-                status='successed',
-            )
-            for _, row in sort_df.iterrows():
-                item = self.item_engine.create(item_id=row['item_id'],
-                                               score=row['score'])
-                recommendations.add(item)
-
-            # check same user has history recommendations or not
-            prev_recommendations = st.session_state[
-                'recommendations'] if st.session_state[
-                    'recommendations'].user_id == user.user_id else None
-
-            if prev_recommendations is None:
-                return recommendations
-
-            # merge prev recommendations and make scores decay 0.99
-            for item in prev_recommendations:
-                # previous algorithm (genre or like ratio) doesn't contain score in item
-                if item.score is None:
-                    continue
-                if item.item_id not in recommendations.item_ids:
-                    copy_item = deepcopy(item)
-                    copy_item.score *= 0.99
-                    recommendations.add(copy_item)
-
-            recommendations.recommendations = sorted(
-                recommendations, key=lambda a: a.score,
-                reverse=True)[:num_candidates]
-
+    def algorithm_selected(self):
+        user = st.session_state['current_user']
+        if user.statistics['train_count'] != 0:
+            st.session_state['recall_algos'] = RECALL_METHODS
         else:
-            recommendations = Recommendations(
-                user_id=st.session_state['current_user'].user_id,
-                status='failed')
-        return recommendations
+            st.session_state['recall_algos'] = [
+                'UserCF-Content', 'Item-Genres'
+            ]
 
-    def recommendations_by_algorithm(self, algorithm: str) -> Recommendations:
-        if algorithm == 'Content-Based Algorithm':
-            # Get recommendations by movie genre similarity
-            recommendations = self.recommend_items_by_genre(
-                item=st.session_state['click_item'],
-                user=st.session_state['current_user'],
-                num_candidates=self.num_recommendations)
-        elif algorithm == 'User-Behavior Algorithm':
-            # Get recommendations by like ratio distance
-            recommendations = self.recommend_items_by_like_ratio(
-                item=st.session_state['click_item'],
-                user=st.session_state['current_user'],
-                num_candidates=self.num_recommendations)
-        else:
-            # Get 50 candidates from recommendations by movie genre and like ratio
-            # Use DCN model to rank items
-            candidates_id = self.recommend_items_by_genre(
-                item=st.session_state['click_item'],
-                user=st.session_state['current_user'],
-                num_candidates=25
-            ).item_ids + self.recommend_items_by_like_ratio(
-                item=st.session_state['click_item'],
-                user=st.session_state['current_user'],
-                num_candidates=25).item_ids
-            test_df = self.get_infer_df(
-                user_id=st.session_state['current_user'].user_id,
-                item_ids=candidates_id)
-            recommendations = self.recommend_items_by_model(
-                df=test_df,
-                item=st.session_state['click_item'],
-                user=st.session_state['current_user'],
-                num_candidates=self.num_recommendations)
-
-        return recommendations
-
-    def make_welcome_recommendations(self):
-        sorted_df = self.item_engine.item_df.sort_values(
-            by=['num_ratings', 'avg_ratings'], ascending=[False, False])
-        recommendations = Recommendations(user_id=-1)
-        for _, rec in sorted_df.head(self.num_recommendations).iterrows():
-            item_info = rec.to_dict()
-            item = self.item_engine.create(item_id=item_info['item_id'])
-            recommendations.add(item)
-        recommendations.status = 'successed'
-        st.session_state['recommendations'] = recommendations
-
-    def algorithm_button_selected(self, algorithm):
-        st.session_state['algorithm'] = algorithm
+        st.session_state['rank_algos'] = RANK_METHODS
+        st.session_state['rerank_algos'] = RERANK_METHODS
 
     def item_button_click(self, item: Item):
-        st.session_state['click_item'] = item
-        st.session_state[
-            'recommendations'] = self.recommendations_by_algorithm(
-                algorithm=st.session_state['algorithm'])
+        st.session_state['clicked_item'] = item
+        st.session_state['clicked_items'].add(item)
 
     def user_selected(self, user_id: int):
         # change user selection
         if user_id != st.session_state['recommendations'].user_id:
-            user = self.user_engine.create(user_id=user_id)
+            user = self.user_engine.search(id=user_id)
+            data_count_df = self.psql_loader.load(
+                'sql/user_stats.sql', query_params={'user_id': user_id})
+            user.statistics.update(data_count_df.iloc[0].to_dict())
+            user.statistics.update(demo_interaction_times=0)
             st.session_state['current_user'] = user
+            st.session_state['recommendations'] = Recommendations(
+                user_id=user_id)
+            st.session_state['clicked_items'] = Recommendations(
+                user_id=user_id)
+            st.session_state['clicked_item'] = None
+            st.session_state['prev_state'] = Recommendations(user_id=user_id)
+            st.session_state['prev_recommendations'] = Recommendations(
+                user_id=user_id)
+        else:
+            # update demo interaction items
+            st.session_state['current_user'].statistics[
+                'demo_interaction_times'] += 1
 
-        if st.session_state['click_item'] is not None:
-            like_ratio_df = self.load_like_ratio_statistics(
-                user=st.session_state['current_user'],
-                item=st.session_state['click_item'])
+    def show_user_info(self):
+        # display user information
+        st.markdown(self.format_user(user=st.session_state['current_user']))
 
-            st.session_state['click_item'].statistics['like_ratio'] = dict(
-                zip(['gender', 'age_interval', 'occupation'],
-                    like_ratio_df[['gender', 'age_interval',
-                                   'occupation']].values[0, :]))
+    def show_algorithm_info(self):
+        # display algorithm information
+        st.header('Recall Information')
+        st.markdown('\n'.join([
+            f"`{idx}:{i}`"
+            for idx, i in enumerate(st.session_state["recall_algos"])
+        ]))
+        st.header('Rank Information')
+        st.markdown('\n'.join(
+            [f"`{i}`" for i in st.session_state["rank_algos"]]))
+        st.header('Rerank Information')
+        st.markdown('\n'.join(
+            [f"`{i}`" for i in st.session_state["rerank_algos"]]))
 
-    def show_click_item_info(self):
+    def show_clicked_item_info(self):
         # Define item if user didn't click item
-        item = st.session_state["click_item"] if st.session_state[
-            "click_item"] is not None else Item(item_id=0,
-                                                movie_title='',
-                                                movie_genres='',
-                                                avg_ratings=None,
-                                                num_ratings=None)
+        item = st.session_state["clicked_item"] if st.session_state[
+            "clicked_item"] is not None else Item(
+                item_id=-1, movie_title='', movie_genres='')
+        item_stats = self.psql_loader.load(sql_file='sql/item_stats.sql',
+                                           query_params={
+                                               'item_id': item.item_id
+                                           }).iloc[0].to_dict()
         item_info = [
-            item.item_id, item.num_ratings, item.avg_ratings,
-            item.statistics['like_ratio']['gender'],
-            item.statistics['like_ratio']['age_interval'],
-            item.statistics['like_ratio']['occupation']
-        ] if st.session_state["click_item"] is not None else [''] * 6
+            item.item_id,
+            int(item_stats['num_ratings']), item_stats['avg_ratings']
+        ] if st.session_state["clicked_item"] is not None else [''] * 3
 
         # Design Layout
         st.header(f'Movie Information: {item.movie_title}', divider='violet')
         st.markdown(
-            f'**Movie Genre:** {" ".join([f"`{i}`" for i in sorted(item.movie_genres.split("|")) if i])}'
+            f'**Movie Genre:** {" ".join([f"`{i}`" for i in sorted(item.movie_genres) if i])}'
         )
         # Movie Information
         with st.container():
             cols = st.columns(3)
-            for (col, title, value) in zip([*cols, *cols], [
-                    'ID', '#Ratings', 'AVG Rating', 'Gender Like Ratio',
-                    'Age Like Ratio', 'Occupation Like Ratio'
-            ], item_info):
+            for (col, title, value) in zip([*cols, *cols],
+                                           ['ID', '#Ratings', 'AVG Rating'],
+                                           item_info):
                 col.metric(title, value)
 
     @staticmethod
     def format_item(item: Item):
-        text = (f'{item.movie_title} \n\n' + ' '.join(
-            [f'`{genre}`' for genre in sorted(item.movie_genres.split('|'))]))
-        if item.score is not None:
-            text += ('\n\n' + f'`Score: {round(item.score, 2)}`')
+        # format item information
+        text = (f'{item.movie_title} \n\n' + '`' +
+                ' | '.join([f'{genre}'
+                            for genre in sorted(item.movie_genres)]) + '`')
+
+        if item.algorithms:
+            text += (
+                '\n\n' + f':blue[Recall: '
+                f'{", ".join([str(st.session_state["recall_algos"].index(i)) for i in item.algorithms["recall"]["name"].split("/")])}]'
+            )
+            text += (
+                '\n\n' +
+                f':violet[Rank Score: {round(item.get("algorithms/rank/score"), 2)}]'
+            )
+        if item.statistics:
+            text += ('\n\n' +
+                     f':red[Impressions: {item.statistics["impressions"]}]')
+
         return text
+
+    def get_recall_api_request(self):
+        query = {}
+        user_id = st.session_state['current_user'].user_id
+        clicked_item_ids = st.session_state['clicked_items'].item_ids
+
+        for name in st.session_state['recall_algos']:
+            if name == 'Item-Genres':
+                if not clicked_item_ids:
+                    continue
+                params = {'item_ids': clicked_item_ids}
+                url = f'{RECALL_METHOD_INFO[name]}/'
+            else:
+                params = {
+                    'similarity_top_k': self.NUM_SIMILARITY_TOP_K,
+                    'output_top_k': self.NUM_EACH_RECALL_RECOMMENDATIONS
+                }
+                url = f'{RECALL_METHOD_INFO[name]}/{user_id}'
+            query[name] = dict(url=url, data=None, params=params)
+
+        return query
+
+    def get_rank_api_request(self):
+        user_id = st.session_state['current_user'].user_id
+        item_ids = st.session_state['recall_items'].item_ids
+        test_df = self.psql_loader.load(sql_file='sql/infer_df.sql',
+                                        query_params=dict(
+                                            user_id=user_id,
+                                            item_ids=tuple(item_ids)))
+        query = {}
+        for name in st.session_state['rank_algos']:
+            url = f'{RANK_METHOD_INFO[name]}/'
+            query[name] = dict(url=url,
+                               json={'df': test_df.to_dict()},
+                               params=None)
+        return query
+
+    def get_rerank_api_request(self):
+
+        query = {}
+
+        rank_df = st.session_state['rank_items'].to_df(
+            columns=['item_id', 'algorithms/rank/score', 'movie_genres'])
+        clicked_df = st.session_state['clicked_items'].to_df(
+            columns=['item_id', 'algorithms/rank/score', 'movie_genres'])
+        impression_df = st.session_state['recommendations'].to_df(
+            columns=['item_id', 'algorithms/rank/score', 'movie_genres'])
+
+        if not clicked_df.empty:
+            clicked_df = clicked_df.iloc[[-1]].reset_index(drop=True)
+
+        df_dict = {
+            'rank_df': rank_df.to_json(orient='split'),
+            'clicked_df': clicked_df.to_json(orient='split'),
+            'impression_df': impression_df.to_json(orient='split')
+        }
+        for name in st.session_state['rerank_algos']:
+            params = dict(top_k=self.NUM_DISPLAY_RECOMMNEDATIONS,
+                          last_n=1,
+                          reset=impression_df.empty)
+            query[name] = dict(url=f'{RERANK_INFO[name]}/',
+                               params=params,
+                               json=df_dict)
+        return query
+
+    def apply_recall_models(self):
+        return {
+            name: requests.get(**query)
+            for name, query in self.get_recall_api_request().items()
+        }
+
+    def apply_rank_models(self):
+        return {
+            name: requests.post(**query)
+            for name, query in self.get_rank_api_request().items()
+        }
+
+    def apply_rerank_models(self):
+        return {
+            name: requests.post(**query)
+            for name, query in self.get_rerank_api_request().items()
+        }
+
+    def postprocess_recall_results(self, df_dict: Dict[str, pd.DataFrame]):
+        clicked_item_ids = st.session_state['clicked_items'].item_ids
+        pred_df = pd.concat(df_dict.values(), ignore_index=True)
+        pred_df = pred_df[~pred_df.item_id.isin(clicked_item_ids)]
+        sort_df = pred_df.groupby('item_id').agg(
+            score=pd.NamedAgg(column='score', aggfunc=sum),
+            algorithm=pd.NamedAgg(column='algorithm',
+                                  aggfunc=lambda a: '/'.join(a))).sort_values(
+                                      by='score',
+                                      ascending=False).reset_index(drop=False)
+        return sort_df
+
+    def postprocess_rank_results(self, df_dict: Dict[str, pd.DataFrame]):
+        pred_df = pd.concat(df_dict.values(), ignore_index=True)
+        sort_df = pred_df.sort_values(by='score',
+                                      ascending=False).reset_index(drop=True)
+        return sort_df
+
+    def postprocess_rerank_results(self, df_dict: Dict[str, pd.DataFrame]):
+        pred_df = pd.concat(df_dict.values(), ignore_index=True)
+        return pred_df
+
+    def apply_stage_model(self, stage: str, key: Optional[str] = None):
+        assert stage in ['recall', 'rank', 'rerank']
+        key = stage if key is None else key
+        pred_results = getattr(self, f'apply_{stage}_models')()
+        df_results = {}
+        for algo, response in pred_results.items():
+            try:
+                result = response.json()
+                pred_df = pd.read_json(result, orient='split')
+                pred_df['algorithm'] = algo
+                df_results[algo] = pred_df
+            except:
+                df_results[algo] = response.status_code
+
+        processed_df = getattr(self,
+                               f'postprocess_{stage}_results')(df_results)
+
+        user_id = st.session_state['current_user'].user_id
+        prev_state_recommendations = st.session_state['prev_state']
+        recommendations = Recommendations(
+            user_id=user_id,
+            status='successed',
+            algorithms=prev_state_recommendations.algorithms)
+        recommendations.algorithms.append(stage)
+
+        for _, item_info in processed_df.iterrows():
+            item_dict = item_info.to_dict()
+            item_id = item_dict.pop('item_id')
+            try:
+                item = prev_state_recommendations.get(item_id=item_id)
+            except:
+                # In recall stage, create from item_engine
+                item = self.item_engine.search(id=item_id)
+            item.algorithms[stage] = dict(name=item_dict['algorithm'],
+                                          score=item_dict['score'])
+            recommendations.add(item)
+
+        st.session_state[key] = recommendations
+        st.session_state['prev_state'] = recommendations
+
+    def postprocess_items(self, items: Recommendations):
+        for item in items:
+            try:
+                prev_item = st.session_state['prev_recommendations'].get(
+                    item_id=item.item_id)
+                item.statistics[
+                    'impressions'] = prev_item.statistics['impressions'] + 1
+                prev_item.statistics['impressions'] = item.statistics[
+                    'impressions']
+            except:
+                item.statistics['impressions'] = 0
+                st.session_state['prev_recommendations'].add(item)
+        return items
+
+    def infer_recommendations(self):
+        for stage, stage_key in zip(STAGES, [f'{s}_items' for s in STAGES]):
+            self.apply_stage_model(stage=stage, key=stage_key)
+        st.session_state['recommendations'] = self.postprocess_items(
+            items=st.session_state['rerank_items'])
 
     def create_window(self):
         # sidebar
         Layout.format_sidebar()
         with st.sidebar:
-            st.header('Algorithm Information')
-            algorithm_selected = st.radio('Recommender', [
-                'Content-Based Algorithm', 'User-Behavior Algorithm',
-                'Deep Cross Network'
-            ])
-            self.algorithm_button_selected(algorithm_selected)
-
             st.header('User ID')
             user_id = st.selectbox('user_id',
-                                   self.user_engine.users,
+                                   self.user_engine.user_id,
                                    label_visibility='collapsed')
             self.user_selected(user_id=user_id)
-            st.markdown(
-                self.format_user(user=st.session_state['current_user']))
-        self.show_click_item_info()
+            self.algorithm_selected()
+
+            self.show_user_info()
+            self.show_algorithm_info()
+
+        self.infer_recommendations()
+        self.show_clicked_item_info()
         self.show_recommendations(title='Guess User May Like',
                                   on_click=self.item_button_click)
 
 
-class BayesianDemo(RecommendationDemo):
-    """Define model performance check on test phase
-    """
-
-    def __init__(self):
-        super().__init__()
-        st.session_state['current_user'] = st.session_state.get(
-            'current_usesr')
-        st.session_state['click_item'] = None
-        st.session_state['recommendations'] = None
-
-    def show_login_form(self):
-        with st.form(key='form'):
-            genres = st.multiselect('Genres',
-                                    self.item_engine.movie_genres,
-                                    max_selections=3)
-            confirm = st.form_submit_button('Confirm')
-            if confirm:
-                # Define a new user
-                st.session_state['current_user'] = User(
-                    user_id=0,
-                    gender=None,
-                    age_interval=None,
-                    occupation=None,
-                    statistics=dict(
-                        genre_click={
-                            genre: {
-                                'alpha': 1,
-                                'beta': 1
-                            }
-                            for genre in self.item_engine.movie_genres
-                        },
-                        prev_genres=[],
-                    ))
-                self.update_genre_posterior(
-                    clicks=genres, impressions=self.item_engine.movie_genres)
-                st.experimental_rerun()
-
-    def update_genre_posterior(self,
-                               clicks: Optional[Union[List[str], set]] = None,
-                               impressions: Optional[Union[List[str],
-                                                           set]] = None):
-        """Update genre posterior by click genres and impression genres
-
-        Args:
-            clicks: List of clicked genres
-            impressions: List of impression genres
-        """
-        if not clicks and not impressions:
-            return
-        st.session_state['current_user'].statistics['prev_genres'] = list(
-            clicks)
-        clicks_set, impressions_set = set(clicks), set(impressions)
-        for genre in impressions_set:
-            st.session_state['current_user'].statistics['genre_click'][genre][
-                'alpha'] += (genre in clicks_set)
-            st.session_state['current_user'].statistics['genre_click'][genre][
-                'beta'] += (genre not in clicks_set)
-
-    def sample_from_genre_posterior(self, top_n: int = 2) -> Tuple[str]:
-        """Get top-n genre by sampling from genre posterior
-
-        Args:
-            top_n: Top-N
-
-        Returns:
-            Tuple[str]: Top-N genres
-        """
-        genre_samples = {
-            genre:
-            scipy.stats.beta(posterior_param['alpha'],
-                             posterior_param['beta']).rvs()
-            for genre, posterior_param in
-            st.session_state['current_user'].statistics['genre_click'].items()
-        }
-        sorted_genres = sorted(genre_samples.items(),
-                               key=lambda a: a[1],
-                               reverse=True)
-        return list(zip(*sorted_genres[:top_n]))[0]
-
-    def recommend_items(self):
-        """make recommendations based on genres
-        """
-        chosen_genres = []
-        prev_genres = st.session_state['current_user'].statistics[
-            'prev_genres']
-        # first recommendation
-        if st.session_state['recommendations'] is None:
-            chosen_genres = prev_genres
-        if not chosen_genres:
-            chosen_genres = self.sample_from_genre_posterior(top_n=2)
-            # get one of genre from previous click genres
-            if not set(chosen_genres).intersection(
-                    prev_genres) and prev_genres:
-                chosen_genres = [
-                    prev_genres[np.random.randint(low=0,
-                                                  high=len(prev_genres))],
-                    *chosen_genres,
-                ]
-
-        # get item by genre, sample from posterior and rank in each genre
-        genre_items = {}
-        for genre in chosen_genres:
-            genre_items[genre] = Recommendations(user_id=0)
-            for item in self.item_engine.search(key='movie_genres',
-                                                value=genre,
-                                                is_contain=True):
-                item.score = scipy.stats.beta(1 + item.pos_ratings,
-                                              1 + item.neg_ratings).rvs()
-                genre_items[genre].add(item)
-            genre_items[genre].recommendations = sorted(genre_items[genre],
-                                                        key=lambda r: r.score,
-                                                        reverse=True)
-        # merge recommendations by each genre
-        genre_recommendations = Recommendations(user_id=0)
-        while len(genre_recommendations) < self.num_recommendations:
-            for genre in chosen_genres:
-                if not genre_items[genre].recommendations:
-                    continue
-                item = genre_items[genre].recommendations.pop(0)
-                if item.item_id not in genre_recommendations.item_ids:
-                    genre_recommendations.add(item)
-                if len(genre_recommendations) == self.num_recommendations:
-                    break
-
-        st.session_state['recommendations'] = genre_recommendations
-        st.session_state['current_user'].statistics[
-            'prev_genres'] = chosen_genres
-
-    def show_posterior(self):
-        """Draw genre posterior distribution and show in plotly
-        """
-        st.header('Genre Posterior Distribution')
-        x_range = np.linspace(0, 1, 200)
-        fig = go.Figure()
-        for genre, posterior_param in st.session_state[
-                'current_user'].statistics['genre_click'].items():
-            # use bold label to represent selected genres
-            label = f'<b>{genre}<b>' if genre in st.session_state[
-                'current_user'].statistics['prev_genres'] else genre
-            fig.add_trace(
-                go.Scatter(x=x_range,
-                           y=scipy.stats.beta.pdf(x_range,
-                                                  1 + posterior_param['alpha'],
-                                                  1 + posterior_param['beta']),
-                           name=label))
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    @staticmethod
-    def format_item(item: Item):
-        text = (
-            f'{item.movie_title} `({item.pos_ratings}/{item.neg_ratings})`\n\n'
-            + ' '.join([
-                f'`{genre}`' for genre in sorted(item.movie_genres.split('|'))
-            ]))
-        if item.score is not None:
-            text += ('\n\n' + f'`Score: {round(item.score, 2)}`')
-        return text
-
-    def item_button_click(self, item: Item):
-        """Define actions after clicking item
-
-        Args:
-            item: clicked item
-        """
-        st.session_state['click_item'] = item
-        # collect click genres and impression genres
-        total_genres = set()
-        click_genres = set()
-        for r_item in st.session_state['recommendations']:
-            genres = set(r_item.movie_genres.split('|'))
-            if r_item.item_id == item.item_id:
-                click_genres.update(genres)
-            total_genres.update(genres)
-        self.update_genre_posterior(clicks=click_genres,
-                                    impressions=total_genres)
-        self.recommend_items()
-
-    def create_window(self):
-        if st.session_state['current_user'] is None:
-            self.show_login_form()
-        else:
-            if st.session_state['recommendations'] is None:
-                self.recommend_items()
-            self.show_posterior()
-            self.show_recommendations(title='Recommendations',
-                                      on_click=self.item_button_click)
-
-
 if __name__ == '__main__':
-    if 'app' not in st.session_state:
-        app = LoginDemo()
-    else:
-        app = st.session_state['app']
-
+    app = ML1MDemo()
     app.create_window()

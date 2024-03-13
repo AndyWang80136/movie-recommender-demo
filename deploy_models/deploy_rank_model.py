@@ -16,20 +16,15 @@ model.eval()
 dataset_config = joblib.load('./output_model/dataset.pkl')
 dataset = DatasetLoader.load(**dataset_config)
 
-
 class Data(BaseModel):
-    data: dict
+    df: dict
 
-
-@app.post("/predict/")
-async def predict(input_data: Data):
-    test_df = pd.DataFrame(input_data.data)
+@app.post("/rank/dcn")
+async def dcn_ranker(data: Data):
+    test_df = pd.DataFrame(data.df)
     trns_df = dataset.transform_df(test_df)
     trns_data = {col: trns_df[col].values for col in trns_df.columns}
     pred_ans = model.predict(trns_data, 128)
     pred_ans = pred_ans.ravel().tolist()
-    return pred_ans
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    test_df['score'] = pred_ans
+    return test_df[['user_id', 'item_id', 'score']].to_json(orient='split')

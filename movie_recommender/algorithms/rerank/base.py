@@ -97,8 +97,14 @@ class _ImpressionReranker(metaclass=ABCMeta):
         """
         if reset:
             self.reset_params()
+        
         out_df = df.copy()
-
+        out_df[self.output_column_name] = self.calculate_score(out_df)
+        out_df = out_df.sort_values(by=self.output_column_name,
+                                    ascending=False).reset_index(drop=True)
+        if top_k:
+            out_df = out_df.head(top_k)
+        
         self._n_times += 1
         if not impression_df.empty:
             impression_value_list = self.get_value_from_df(impression_df)
@@ -106,11 +112,5 @@ class _ImpressionReranker(metaclass=ABCMeta):
         if not clicked_df.empty:
             clicked_value_list = self.get_value_from_df(clicked_df)
             self.update_clicks_param(clicked_value_list)
-
-        out_df[self.output_column_name] = self.calculate_score(out_df)
-        out_df = out_df.sort_values(by=self.output_column_name,
-                                    ascending=False).reset_index(drop=True)
-        if top_k:
-            out_df = out_df.head(top_k)
 
         return out_df

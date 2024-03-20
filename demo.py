@@ -35,6 +35,28 @@ MODELS = {
     'rank': RANK_METHODS,
     'rerank': RERANK_METHODS
 }
+BEST_RECALL_PARAMS = {
+    'UserCF-Ratings': {
+        'similarity_top_k': 100,
+        'output_top_k': 100
+    },
+    'UserCF-Content': {
+        'similarity_top_k': 100,
+        'output_top_k': 100
+    },
+    'ItemCF-Ratings': {
+        'similarity_top_k': 10,
+        'output_top_k': 100
+    },
+    'ItemCF-Genres': {
+        'similarity_top_k': 10,
+        'output_top_k': 100
+    },
+    'Item-Genres': {
+        'similarity_top_k': 50,
+        'output_top_k': 100
+    }
+}
 
 
 class Layout:
@@ -264,13 +286,13 @@ class ML1MDemo(RecommendationDemo):
             if name == 'Item-Genres':
                 if not clicked_item_ids:
                     continue
-                params = {'item_ids': clicked_item_ids}
+                params = {
+                    'item_ids': clicked_item_ids,
+                    **BEST_RECALL_PARAMS[name]
+                }
                 url = f'{RECALL_METHOD_INFO[name]}/'
             else:
-                params = {
-                    'similarity_top_k': self.NUM_SIMILARITY_TOP_K,
-                    'output_top_k': self.NUM_EACH_RECALL_RECOMMENDATIONS
-                }
+                params = BEST_RECALL_PARAMS[name]
                 url = f'{RECALL_METHOD_INFO[name]}/{user_id}'
             query[name] = dict(url=url, data=None, params=params)
 

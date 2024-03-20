@@ -6,8 +6,9 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from numpy.distutils.misc_util import is_sequence
 from sklearn.preprocessing import MultiLabelBinarizer
+
+from movie_recommender.utils import is_valid_sequence
 
 from ....utils.typing import UserIds
 from .cf import MovieCF
@@ -90,7 +91,7 @@ class UserCF(MovieCF, metaclass=ABCMeta):
 
         if user_id is not None:
             # remove self user id if `user_id` is given
-            user_id = user_id if is_sequence(user_id) else [user_id]
+            user_id = user_id if is_valid_sequence(user_id) else [user_id]
             assert query_matrix.shape[0] == len(user_id)
             np_user_ids = np.asarray(user_id).reshape(query_matrix.shape[0],
                                                       -1)
@@ -212,10 +213,10 @@ class RatingUserCF(UserCF):
         Returns:
             Union[List[bool], bool]: user id in history data or not
         """
-        user_id_list = [user_ids] if not is_sequence(user_ids) else user_ids
+        user_id_list = [user_ids] if not is_valid_sequence(user_ids) else user_ids
         state = np.isin(user_id_list,
                         self.user_interacted_items.index).tolist()
-        return state if is_sequence(user_ids) else state[0]
+        return state if is_valid_sequence(user_ids) else state[0]
 
     def create_query_matrix(self, user_id: Union[UserIds, int]) -> np.ndarray:
         """create query matrix for similarity searching by `user_id`
@@ -226,7 +227,7 @@ class RatingUserCF(UserCF):
         Returns:
             np.ndarray: query matrix
         """
-        if not is_sequence(user_id):
+        if not is_valid_sequence(user_id):
             user_id = [user_id]
         index = self.user_encoder.transform(user_id)
         query = copy.deepcopy(self.matrix[index, :])
@@ -270,8 +271,8 @@ class ContentUserCF(UserCF):
         Returns:
             Union[List[bool], bool]: user id in history data or not
         """
-        user_id_list = [user_ids] if not is_sequence(user_ids) else user_ids
-        return [True] * len(user_id_list) if is_sequence(user_ids) else True
+        user_id_list = [user_ids] if not is_valid_sequence(user_ids) else user_ids
+        return [True] * len(user_id_list) if is_valid_sequence(user_ids) else True
 
     def initialize_matrix(self) -> np.ndarray:
         """Initialize user content similarity matrix
@@ -304,7 +305,7 @@ class ContentUserCF(UserCF):
         """
         assert (user_id is not None) ^ (user_features is not None)
         if user_id is not None:
-            if not is_sequence(user_id):
+            if not is_valid_sequence(user_id):
                 user_id = [user_id]
             query = self.feature_encoder.transform(
                 self.user_df.set_index('user_id').loc[user_id][

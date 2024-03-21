@@ -1,8 +1,11 @@
+tensorflow==2.15.0
 feature_analysis @git+https://github.com/AndyWang80136/feature_analysis.git
 mmh3
 uvicorn
 fastapi
 streamlit
 plotly
-sqlalchemy
+sqlalchemy<2.0
+psycopg2
 aiohttp
+

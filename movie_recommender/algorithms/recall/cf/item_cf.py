@@ -5,8 +5,9 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from numpy.distutils.misc_util import is_sequence
 from sklearn.preprocessing import LabelEncoder, MultiLabelBinarizer
+
+from movie_recommender.utils import is_valid_sequence
 
 from ....utils.typing import ItemIds, UserIds
 from .cf import MovieCF
@@ -27,17 +28,18 @@ class ItemCF(MovieCF, metaclass=ABCMeta):
 
     def check_user_status(
             self, user_ids: Union[UserIds, int]) -> Union[List[bool], bool]:
-        """check the user id status
+        """check the user id in history data or not 
 
         Args:
             user_ids: single user id or user id list
 
         Returns:
-            Union[List[bool], bool]: status of each user id 
+            Union[List[bool], bool]: user id in history data or not
         """
-        if not is_sequence(user_ids):
+        if not is_valid_sequence(user_ids):
             user_ids = [user_ids]
-        return [True] * len(user_ids) if len(user_ids) != 1 else True
+        state = np.isin(user_ids, self.user_interacted_items.index)
+        return state if len(state) != 1 else state[0]
 
     def infer(self,
               item_id: Optional[int] = None,
@@ -142,6 +144,7 @@ class ItemCF(MovieCF, metaclass=ABCMeta):
         if user_id is not None:
             if not self.check_user_status(user_ids=user_id):
                 return pd.DataFrame([], columns=['item_id', 'score'])
+            
             item_ids = self.user_interacted_items.loc[user_id].item_ids
             ratings = self.user_interacted_items.loc[user_id].ratings
 
@@ -170,21 +173,6 @@ class RatingItemCF(ItemCF):
     """Item-Based CF by using rating as similarity matrix
     """
 
-    def check_user_status(
-            self, user_ids: Union[UserIds, int]) -> Union[List[bool], bool]:
-        """check the user id in history data or not 
-
-        Args:
-            user_ids: single user id or user id list
-
-        Returns:
-            Union[List[bool], bool]: user id in history data or not
-        """
-        if not is_sequence(user_ids):
-            user_ids = [user_ids]
-        state = np.isin(user_ids, self.user_interacted_items.index)
-        return state if len(state) != 1 else state[0]
-
     def initialize_matrix(self) -> np.ndarray:
         """Initialize rating similarity matrix
 
@@ -208,7 +196,7 @@ class RatingItemCF(ItemCF):
         Returns:
             np.ndarray: query matrix
         """
-        if not is_sequence(item_id):
+        if not is_valid_sequence(item_id):
             item_id = [item_id]
         index = self.item_encoder.transform(item_id)
         query = copy.deepcopy(self.matrix[index, :])
@@ -278,7 +266,7 @@ class GenreItemCF(ItemCF):
         Returns:
             np.ndarray: query matrix
         """
-        if not is_sequence(item_id):
+        if not is_valid_sequence(item_id):
             item_id = [item_id]
         index = self.item_encoder.transform(item_id)
         query = copy.deepcopy(self.matrix[index, :])

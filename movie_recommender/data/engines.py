@@ -3,8 +3,9 @@ from typing import ClassVar
 
 import numpy as np
 import pandas as pd
-from numpy.distutils.misc_util import is_sequence
 from sklearn.preprocessing import LabelEncoder
+
+from movie_recommender.utils import is_valid_sequence
 
 from .components import Item, User
 from .mixins import InstanceFactoryMixin
@@ -28,12 +29,12 @@ class _DataFrameEngine:
     def search(self, id: int, return_instance: bool = True) -> pd.DataFrame:
         try:
             id_list = np.array(
-                [id]) if not is_sequence(id) else np.asarray(id).ravel()
+                [id]) if not is_valid_sequence(id) else np.asarray(id).ravel()
             index = self.encoder.transform(id_list)
             df = self.df.loc[index]
             if return_instance:
                 output = self._to_instance(df=df)
-                if not is_sequence(id):
+                if not is_valid_sequence(id):
                     output = output[0]
             else:
                 output = df

@@ -6,7 +6,7 @@ from feature_analysis.process import train_process
 from feature_analysis.utils import load_yaml
 from loguru import logger
 
-from dataset import *
+from movie_recommender.data.dataset import *
 
 
 def train(config: Union[Path, str]):

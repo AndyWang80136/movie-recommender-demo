@@ -8,6 +8,8 @@ import pandas as pd
 from feature_analysis.data import ML100K, DatasetLoader
 from sklearn.base import BaseEstimator, TransformerMixin
 
+__all__ = ['ML1M']
+
 
 class HashBucketEncoder(TransformerMixin, BaseEstimator):
     """Encode categorical features into buckets by hash

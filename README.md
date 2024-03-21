@@ -11,9 +11,9 @@ pip install -e .
 ## Dataset
 The dataset used in the demo: `MovieLens 1M Dataset`
 
-## Train DCN Model
+## Train DCN Rank Model
 ```console
-python train_model.py --config configs/ml-1m.yaml
+python tools/train_rank_model.py --config configs/ml-1m.yaml
 ```
 
 ## Serve Models
@@ -30,6 +30,12 @@ uvicorn deploy_models.deploy_rerank_algorithm:app --port 8002
 ```console
 streamlit run demo.py
 ```
+
+## Demo
+### Movie Recommender
+https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/a112f8d9-a5e1-4f6f-b957-23967b4d385c
+
+
 
 ## Statistics
 ### Recall (CF)

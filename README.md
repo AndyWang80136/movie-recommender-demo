@@ -32,6 +32,58 @@ streamlit run demo.py
 ```
 
 ## Statistics
+### Recall (CF)
+#### hyperparameter tuning on val data
+```console
+python tools/recall_hyperparam_tuning.py --save-dir val_hparam --similarity_top_k 10,20,50,100 --output_top_k 100
+```
+`val_hparam/best_metrics.json`
+```json
+{
+    "usercf-content": {
+        "similarity_top_k": 100,
+        "output_top_k": 100,
+        "metric_value": 0.26981465977959906
+    },
+    "usercf-ratings": {
+        "similarity_top_k": 100,
+        "output_top_k": 100,
+        "metric_value": 0.23871668488485528
+    },
+    "itemcf-ratings": {
+        "similarity_top_k": 10,
+        "output_top_k": 100,
+        "metric_value": 0.21642876390303534
+    },
+    "itemcf-genres": {
+        "similarity_top_k": 10,
+        "output_top_k": 100,
+        "metric_value": 0.03703561596627432
+    }
+}
+```
+#### Evaluation on test data
+```console
+python tools/recall_evaluate.py --config val_hparam/best_params.json --phase test --save-dir eval_results/
+```
+`eval_results/metrics.json`
+```json
+{
+    "usercf-content": {
+        "recall": 0.23613394701789722
+    },
+    "usercf-ratings": {
+        "recall": 0.24083239836659517
+    },
+    "itemcf-ratings": {
+        "recall": 0.21642782513385445
+    },
+    "itemcf-genres": {
+        "recall": 0.040183930035866816
+    }
+}
+```
+
 ### Rank (DCN)
 #### Hash Buckets
 ```

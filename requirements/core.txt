@@ -4,5 +4,6 @@ uvicorn
 fastapi
 streamlit
 plotly
-sqlalchemy
+sqlalchemy<2.0
+psycopg2
 aiohttp

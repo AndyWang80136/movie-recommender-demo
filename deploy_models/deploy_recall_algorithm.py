@@ -1,10 +1,8 @@
 from typing import List
 
-import uvicorn
 from fastapi import FastAPI, Query
 from typing_extensions import Annotated
 
-from dataset import *
 from movie_recommender.algorithms import (ContentUserCF, GenreItemCF,
                                           RatingItemCF, RatingUserCF)
 from movie_recommender.data import MovieData

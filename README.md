@@ -33,7 +33,7 @@ streamlit run demo.py
 
 ## Demo
 ### Movie Recommender
-https://github.com/AndyWang80136/movie-recommender-demo/assets/14234143/a112f8d9-a5e1-4f6f-b957-23967b4d385c
+[Demo](https://drive.google.com/file/d/1DJajbWrkiWPEF61BT26W55DpbCPCDHwE/view?usp=sharing)
 
 
 
@@ -104,10 +104,10 @@ No training bucket ratio: 0.0244
 
 #### Evaluation Metric
 ```
-Testing AUC: 0.7266
+Testing AUC: 0.7313
 Total test users: 1239
-Average user test AUC: 0.6926
-Average user test NDCG@8: 0.8096
+Average user test AUC: 0.6965
+Average user test NDCG@8: 0.8133
 ```
 
 ## Citation

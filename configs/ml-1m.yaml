@@ -17,9 +17,9 @@ features:
 optimizer: "SGD"
 epochs: 100
 random_seed: 42
-lr: 0.001
+lr: 0.01
 model:
-    dnn_hidden_units: [32, 32]
-    embedding_dim: 8
+    dnn_hidden_units: [128, 128]
+    embedding_dim: 32
     cross_num: 2
 save_model_dir: ./output_model/

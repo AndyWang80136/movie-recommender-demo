@@ -10,7 +10,7 @@ def parse_requirement(requirement_file: Path):
 
 
 setup(name='movie-recommender',
-      version='1.0.0',
+      version='1.1.0',
       author='Andy Wang',
       author_email='andy80136@gmail.com',
       description='Recommender system in PyTorch',

@@ -1,4 +1,4 @@
-feature_analysis @git+https://github.com/AndyWang80136/feature_analysis.git
+feature_analysis @git+https://github.com/AndyWang80136/feature_analysis.git@0.0.0
 mmh3
 uvicorn
 fastapi

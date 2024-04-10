@@ -14,6 +14,7 @@ setup(name='movie-recommender',
       author='Andy Wang',
       author_email='andy80136@gmail.com',
       description='Recommender system in PyTorch',
+      license='MIT License',
       packages=find_packages(),
       install_requires=parse_requirement('requirements/core.txt'),
       extras_require={'dev': parse_requirement('requirements/dev.txt')})

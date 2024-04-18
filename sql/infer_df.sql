@@ -10,6 +10,19 @@ SELECT
     *,
     occupation_id AS occupation,
     age_id AS age,
-    (SELECT MAX(rating_timestamp) FROM ratings WHERE user_id = {{ user_id }}) AS timestamp
+    COALESCE(
+		(
+            SELECT 
+                MAX(rating_timestamp)
+            FROM ratings 
+            JOIN rating_phase USING (rating_id) 
+            WHERE user_id = {{ user_id }} AND phase = 'train'
+        ),
+		(
+            SELECT 
+                MAX(rating_timestamp) 
+            FROM ratings
+        )
+	) AS timestamp
 FROM cte
 JOIN users USING (user_id)

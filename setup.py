@@ -10,10 +10,10 @@ def parse_requirement(requirement_file: Path):
 
 
 setup(name='movie-recommender',
-      version='1.1.0',
+      version='1.1.1',
       author='Andy Wang',
       author_email='andy80136@gmail.com',
-      description='Recommender system in PyTorch',
+      description='Movie recommender system in PyTorch',
       license='MIT License',
       packages=find_packages(),
       install_requires=parse_requirement('requirements/core.txt'),

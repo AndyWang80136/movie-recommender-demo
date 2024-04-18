@@ -33,7 +33,7 @@ streamlit run demo.py
 
 ## Demo
 ### Movie Recommender
-[Demo](https://drive.google.com/file/d/1DJajbWrkiWPEF61BT26W55DpbCPCDHwE/view?usp=sharing)
+[Demo](https://drive.google.com/file/d/17fT4Jhhwn77do9PxdYNOyk9FB-dkqs6O/view?usp=drive_link)
 
 
 
